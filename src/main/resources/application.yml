@@ -1,0 +1,11 @@
+server:
+  port: 8088
+spring:
+  application:
+    name: JRedmine
+  profiles:
+    active: local # 默认启用本地环境（可以在启动时覆盖）
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
