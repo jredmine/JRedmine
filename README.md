@@ -8,17 +8,17 @@
 
 目前的项目开发成员有：
 
-* Lei-Dong
-* DaCheng-Gao
-* Feng-Pan
+* Lei Dong
+* Dacheng Gao
+* Feng Pan
 
 ### 本地部署
 
 1. 克隆项目到本地
 
-```shell
-git clone https://github.com/dgp-dream/JRedmine.git
-```
+    ```shell
+    git clone https://github.com/dgp-dream/JRedmine.git
+    ```
 
 2. 安装MySQL8.0，并创建数据库 `jredmine`
 
@@ -28,54 +28,54 @@ git clone https://github.com/dgp-dream/JRedmine.git
 
 5. 配置 `Maven` 镜像为阿里云镜像
 
-> 修改 `~/.m2/settings.xml` 配置文件为如下配置
+   修改 `~/.m2/settings.xml` 配置文件为如下配置：
 
-```shell
-<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 
-	https://maven.apache.org/xsd/settings-1.0.0.xsd">
-<mirrors>
-	<mirror>
-		<id>nexus-aliyun</id>
-		<mirrorOf>central</mirrorOf>
-		<name>Nexus aliyun</name>
-		<url>http://maven.aliyun.com/nexus/content/groups/public</url>
-	</mirror>
-</mirrors>
-</settings>
-```
+    ```xml
+    <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 
+        https://maven.apache.org/xsd/settings-1.0.0.xsd">
+    <mirrors>
+        <mirror>
+            <id>nexus-aliyun</id>
+            <mirrorOf>central</mirrorOf>
+            <name>Nexus aliyun</name>
+            <url>http://maven.aliyun.com/nexus/content/groups/public</url>
+        </mirror>
+    </mirrors>
+    </settings>
+    ```
 
 6. 编译构建项目
 
-```shell
-mvn clean compile 
-```
+    ```shell
+    mvn clean compile 
+    ```
 
 7. 启动项目
 
-```shell
-mvn spring-boot:run
-```
+    ```shell
+    mvn spring-boot:run
+    ```
 
 8. 访问 `http://localhost:8088/index` 可测试是否部署成功
 
 9. 注册接口测试，使用IDEA内置的 `REST Client` 插件或其他工具，发送如下请求
 
-```http request
-POST http://localhost:8088/api/users/register
-Content-Type: application/json
-
-{
-  "login": "test3",
-  "password": "12345678",
-  "confirmPassword": "12345678",
-  "firstname": "abc",
-  "lastname": "abc",
-  "email": "test3@qq.com",
-  "hideEmailFlag": false
-}
-```
+    ```http request
+    POST http://localhost:8088/api/users/register
+    Content-Type: application/json
+    
+    {
+      "login": "test3",
+      "password": "12345678",
+      "confirmPassword": "12345678",
+      "firstname": "abc",
+      "lastname": "abc",
+      "email": "test3@qq.com",
+      "hideEmailFlag": false
+    }
+    ```
 
 
 ### 技术栈
@@ -87,10 +87,9 @@ Content-Type: application/json
 * SpringSecurity
 * JWT
 * MapStruct
-* MySQL8.0
+* MySQL 8.0
 * Redis
-
-**...待续**
+* **...待续**
  
 ### 功能模块
 
@@ -113,5 +112,4 @@ Content-Type: application/json
 - [ ] 多数据源支持
 - [ ] 多种主题风格支持
 - [ ] 插件系统
-
-**...待续**
+- [ ] **...待续**
