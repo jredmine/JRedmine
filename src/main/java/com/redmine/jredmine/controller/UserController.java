@@ -2,6 +2,7 @@ package com.redmine.jredmine.controller;
 
 import com.redmine.jredmine.dto.UserRegisterRequestDTO;
 import com.redmine.jredmine.dto.UserRegisterResponseDTO;
+import com.redmine.jredmine.response.ApiResponse;
 import com.redmine.jredmine.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,13 +25,13 @@ public class UserController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<UserRegisterResponseDTO> register(@Valid @RequestBody UserRegisterRequestDTO userRegisterRequestDTO, BindingResult bindingResult) throws Exception {
+    public ResponseEntity<ApiResponse<UserRegisterResponseDTO>> register(@Valid @RequestBody UserRegisterRequestDTO userRegisterRequestDTO, BindingResult bindingResult) throws Exception {
         if (bindingResult.hasErrors()) {
-            //return ResponseEntity.badRequest().build();
             throw new Exception(Objects.requireNonNull(bindingResult.getFieldError()).getDefaultMessage());
         }
 
         UserRegisterResponseDTO response = userService.register(userRegisterRequestDTO);
-        return ResponseEntity.ok(response);
+        ApiResponse<UserRegisterResponseDTO> apiResponse = new ApiResponse<>("success", "User registered successfully", response);
+        return ResponseEntity.ok(apiResponse);
     }
 }
