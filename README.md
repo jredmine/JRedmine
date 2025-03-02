@@ -81,10 +81,10 @@
 ### 技术栈
 
 * JDK 21
-* SpringBoot 3.4.3
-* SpringJPA
-* SpringQueryDSL
-* SpringSecurity
+* Spring Boot 3.4.3
+* Spring Data JPA
+* Spring QueryDSL
+* Spring Security
 * JWT
 * MapStruct
 * MySQL 8.0
