@@ -17,7 +17,7 @@
 1. 克隆项目到本地
 
     ```shell
-    git clone https://github.com/dgp-dream/JRedmine.git
+    git clone https://github.com/jredmine/JRedmine.git
     ```
 
 2. 安装MySQL8.0，并创建数据库 `jredmine`
