@@ -1,4 +1,4 @@
-package com.redmine.jredmine.dto;
+package com.github.jredmine.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

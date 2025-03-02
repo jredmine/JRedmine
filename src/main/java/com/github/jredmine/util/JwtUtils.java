@@ -1,4 +1,4 @@
-package com.redmine.jredmine.util;
+package com.github.jredmine.util;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;

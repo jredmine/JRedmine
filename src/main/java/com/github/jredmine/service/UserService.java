@@ -1,11 +1,10 @@
-package com.redmine.jredmine.service;
+package com.github.jredmine.service;
 
-import ch.qos.logback.core.util.MD5Util;
-import com.redmine.jredmine.dto.UserRegisterRequestDTO;
-import com.redmine.jredmine.dto.UserRegisterResponseDTO;
-import com.redmine.jredmine.entity.User;
-import com.redmine.jredmine.mapper.UserMapper;
-import com.redmine.jredmine.repository.UserRepository;
+import com.github.jredmine.dto.UserRegisterRequestDTO;
+import com.github.jredmine.dto.UserRegisterResponseDTO;
+import com.github.jredmine.entity.User;
+import com.github.jredmine.mapper.UserMapper;
+import com.github.jredmine.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;

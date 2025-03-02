@@ -1,4 +1,4 @@
-package com.redmine.jredmine;
+package com.github.jredmine;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

@@ -1,4 +1,4 @@
-package com.redmine.jredmine.entity;
+package com.github.jredmine.entity;
 
 import jakarta.persistence.*;
 import lombok.Data;

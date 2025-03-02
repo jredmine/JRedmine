@@ -1,7 +1,7 @@
-package com.redmine.jredmine.handler;
+package com.github.jredmine.handler;
 
-import com.redmine.jredmine.response.ApiResponse;
-import com.redmine.jredmine.response.ErrorDetails;
+import com.github.jredmine.response.ApiResponse;
+import com.github.jredmine.response.ErrorDetails;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;

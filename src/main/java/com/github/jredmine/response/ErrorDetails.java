@@ -1,4 +1,4 @@
-package com.redmine.jredmine.response;
+package com.github.jredmine.response;
 
 import lombok.Data;
 

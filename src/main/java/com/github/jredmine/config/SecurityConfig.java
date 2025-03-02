@@ -1,4 +1,4 @@
-package com.redmine.jredmine.config;
+package com.github.jredmine.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

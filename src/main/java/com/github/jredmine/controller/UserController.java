@@ -1,11 +1,10 @@
-package com.redmine.jredmine.controller;
+package com.github.jredmine.controller;
 
-import com.redmine.jredmine.dto.UserRegisterRequestDTO;
-import com.redmine.jredmine.dto.UserRegisterResponseDTO;
-import com.redmine.jredmine.response.ApiResponse;
-import com.redmine.jredmine.service.UserService;
+import com.github.jredmine.dto.UserRegisterRequestDTO;
+import com.github.jredmine.dto.UserRegisterResponseDTO;
+import com.github.jredmine.response.ApiResponse;
+import com.github.jredmine.service.UserService;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.PostMapping;

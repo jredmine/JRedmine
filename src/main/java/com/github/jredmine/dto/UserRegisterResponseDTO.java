@@ -1,4 +1,4 @@
-package com.redmine.jredmine.dto;
+package com.github.jredmine.dto;
 
 import lombok.Data;
 

@@ -1,8 +1,7 @@
-package com.redmine.jredmine;
+package com.github.jredmine;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
 
 @SpringBootApplication
 public class JRedmineApplication {
