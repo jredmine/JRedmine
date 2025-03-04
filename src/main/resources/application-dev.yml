@@ -6,3 +6,7 @@ spring:
     url: jdbc:mysql://localhost:3307/jredmine
     username: root
     password: root
+  jpa:
+    hibernate:
+      ddl-auto: update # 自动更新表结构
+    show-sql: true # 在控制台输出SQL语句
