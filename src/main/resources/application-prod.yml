@@ -3,10 +3,30 @@ server:
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3307/jredmine
+    url: jdbc:mysql://localhost:3307/jredmine?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
     username: root
     password: root
-  jpa:
-    hibernate:
-      ddl-auto: validate # 只校验数据库表结构是否匹配实体类，不做变更
-    show-sql: false
+
+# MyBatis Plus 配置
+mybatis-plus:
+  # 配置扫描 Mapper XML 文件路径
+  mapper-locations: classpath*:/mapper/**/*.xml
+  # 配置实体类包路径
+  type-aliases-package: com.github.jredmine.entity
+  # 配置
+  configuration:
+    # 开启驼峰命名转换
+    map-underscore-to-camel-case: true
+    # 生产环境关闭 SQL 日志
+    log-impl: org.apache.ibatis.logging.nop.NoLoggingImpl
+  # 全局配置
+  global-config:
+    db-config:
+      # 主键类型：AUTO(数据库自增)
+      id-type: AUTO
+      # 逻辑删除字段名
+      logic-delete-field: deleted
+      # 逻辑删除值（已删除）
+      logic-delete-value: 1
+      # 逻辑未删除值（未删除）
+      logic-not-delete-value: 0

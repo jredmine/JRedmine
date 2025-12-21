@@ -1,13 +1,9 @@
 package com.github.jredmine.repository;
 
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.github.jredmine.entity.User;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.querydsl.QuerydslPredicateExecutor;
-import org.springframework.stereotype.Repository;
+import org.apache.ibatis.annotations.Mapper;
 
-import java.util.Optional;
-
-@Repository
-public interface UserRepository extends JpaRepository<User, Long>, QuerydslPredicateExecutor<User> {
-    Optional<User> findByLogin(String login);
+@Mapper
+public interface UserRepository extends BaseMapper<User> {
 }
