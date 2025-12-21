@@ -1,4 +1,4 @@
-package com.github.jredmine.response;
+package com.github.jredmine.dto.response;
 
 import lombok.Data;
 
@@ -22,3 +22,4 @@ public class ApiResponse<T> {
         this.error = error;
     }
 }
+

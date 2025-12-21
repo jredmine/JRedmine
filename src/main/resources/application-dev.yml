@@ -10,7 +10,7 @@ spring:
 # MyBatis Plus 配置
 mybatis-plus:
   # 配置扫描 Mapper XML 文件路径
-  mapper-locations: classpath*:/mapper/**/*.xml
+  mapper-locations: classpath:mapper/**/*.xml
   # 配置实体类包路径
   type-aliases-package: com.github.jredmine.entity
   # 配置

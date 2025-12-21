@@ -1,4 +1,4 @@
-package com.github.jredmine.dto;
+package com.github.jredmine.dto.request.user;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -33,3 +33,4 @@ public class UserRegisterRequestDTO {
 
     private boolean hideEmailFlag;
 }
+

@@ -1,7 +1,7 @@
-package com.github.jredmine.handler;
+package com.github.jredmine.exception.handler;
 
-import com.github.jredmine.response.ApiResponse;
-import com.github.jredmine.response.ErrorDetails;
+import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.ErrorDetails;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -24,3 +24,4 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(apiResponse, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 }
+

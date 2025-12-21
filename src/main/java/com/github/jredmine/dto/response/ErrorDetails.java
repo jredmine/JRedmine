@@ -1,4 +1,4 @@
-package com.github.jredmine.response;
+package com.github.jredmine.dto.response;
 
 import lombok.Data;
 
@@ -9,3 +9,4 @@ public class ErrorDetails {
     private String error;
     private String path;
 }
+

@@ -1,8 +1,8 @@
 package com.github.jredmine.controller;
 
-import com.github.jredmine.dto.UserRegisterRequestDTO;
-import com.github.jredmine.dto.UserRegisterResponseDTO;
-import com.github.jredmine.response.ApiResponse;
+import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
+import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;

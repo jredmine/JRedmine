@@ -1,4 +1,4 @@
-package com.github.jredmine.dto;
+package com.github.jredmine.dto.response.user;
 
 import lombok.Data;
 
@@ -8,3 +8,4 @@ public class UserRegisterResponseDTO {
     private String firstname;
     private String lastname;
 }
+
