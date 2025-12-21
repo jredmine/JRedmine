@@ -48,9 +48,8 @@ JRedmine 是一个使用 Spring Boot 构建的开源项目管理系统，旨在�
 
 | 技术 | 版本 | 说明 |
 |------|------|------|
-| **Spring Data JPA** | - | ORM 框架 |
-| **Hibernate** | - | JPA 实现 |
-| **QueryDSL** | 5.0.0 | 类型安全查询 |
+| **MyBatis Plus** | 3.5.7 | ORM 框架 |
+| **Lambda QueryWrapper** | - | 类型安全查询 |
 | **MySQL** | 8.0 | 主数据库 |
 
 ### 工具库
@@ -69,7 +68,8 @@ JRedmine 是一个使用 Spring Boot 构建的开源项目管理系统，旨在�
 - ⏳ **SpringDoc OpenAPI** - API 文档
 - ⏳ **Spring Boot Actuator** - 监控和健康检查
 
-> 📝 详细的技术栈分析和优化建议请查看 [技术栈分析与优化建议文档](./docs/技术栈分析与优化建议.md)
+> 📝 详细的技术栈分析和优化建议请查看 [技术栈分析与优化建议文档](./docs/技术栈分析与优化建议.md)  
+> 📝 JPA 到 MyBatis Plus 迁移说明请查看 [迁移说明文档](./docs/JPA到MyBatisPlus迁移说明.md)
 
 ## 📋 功能模块
 
@@ -157,6 +157,17 @@ spring:
     url: jdbc:mysql://localhost:3306/jredmine?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
     username: your_username
     password: your_password
+
+# MyBatis Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.github.jredmine.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: AUTO
 ```
 
 #### 4. Maven 配置（可选）
@@ -215,6 +226,26 @@ Content-Type: application/json
 }
 ```
 
+### MyBatis Plus 使用示例
+
+项目使用 MyBatis Plus 和 Lambda QueryWrapper 进行类型安全查询：
+
+```java
+// 类型安全查询示例
+LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+wrapper.eq(User::getStatus, 1)
+       .like(User::getLogin, "admin")
+       .orderByDesc(User::getCreatedOn);
+List<User> users = userRepository.selectList(wrapper);
+
+// 单条查询
+LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+queryWrapper.eq(User::getLogin, "admin");
+User user = userRepository.selectOne(queryWrapper);
+```
+
+> 📝 更多使用示例请查看 [JPA到MyBatisPlus迁移说明](./docs/JPA到MyBatisPlus迁移说明.md)
+
 ## 📚 项目文档
 
 项目详细文档位于 `docs/` 目录：
@@ -225,6 +256,8 @@ Content-Type: application/json
 - ⚠️ [缺失功能模块清单](./docs/缺失功能模块清单.md) - 需要补充的功能模块
 - 💡 [功能模块优化建议](./docs/功能模块优化建议.md) - 模块优化和实施建议
 - 🔧 [技术栈分析与优化建议](./docs/技术栈分析与优化建议.md) - 技术栈分析和优化建议
+- 🗄️ [ORM框架选择分析与建议](./docs/ORM框架选择分析与建议.md) - ORM 框架对比和选择建议
+- 📝 [JPA到MyBatisPlus迁移说明](./docs/JPA到MyBatisPlus迁移说明.md) - 迁移文档和使用指南
 
 > 查看 [文档导航](./docs/README.md) 获取完整的文档列表
 
@@ -291,6 +324,7 @@ Content-Type: application/json
 ## 🔗 相关链接
 
 - [Spring Boot 官方文档](https://spring.io/projects/spring-boot)
+- [MyBatis Plus 官方文档](https://baomidou.com/)
 - [Redmine 官方网站](https://www.redmine.org/)
 - [项目 Issues](https://github.com/jredmine/JRedmine/issues)
 
