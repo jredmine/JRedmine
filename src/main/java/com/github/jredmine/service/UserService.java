@@ -5,6 +5,8 @@ import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.dto.converter.UserConverter;
+import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.user.UserMapper;
 import org.springframework.stereotype.Service;
 
@@ -16,14 +18,14 @@ public class UserService {
         this.userMapper = userMapper;
     }
 
-    public UserRegisterResponseDTO register(UserRegisterRequestDTO requestDTO) throws Exception {
+    public UserRegisterResponseDTO register(UserRegisterRequestDTO requestDTO) {
         // 使用 Lambda QueryWrapper 检查用户是否存在（类型安全）
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(User::getLogin, requestDTO.getLogin());
         User existsUser = userMapper.selectOne(queryWrapper);
         
         if (existsUser != null) {
-            throw new Exception("User already exists");
+            throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
         }
 
         User user = new User();
