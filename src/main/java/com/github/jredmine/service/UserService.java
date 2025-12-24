@@ -10,8 +10,11 @@ import com.github.jredmine.dto.converter.UserConverter;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.user.UserMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
+@Slf4j
 @Service
 public class UserService {
     private final UserMapper userMapper;
@@ -21,23 +24,39 @@ public class UserService {
     }
 
     public UserRegisterResponseDTO register(UserRegisterRequestDTO requestDTO) {
-        // 使用 Lambda QueryWrapper 检查用户是否存在（类型安全）
-        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(User::getLogin, requestDTO.getLogin());
-        User existsUser = userMapper.selectOne(queryWrapper);
+        // 使用 MDC 添加上下文信息（用于结构化日志）
+        MDC.put("operation", "user_register");
+        MDC.put("login", requestDTO.getLogin());
         
-        if (existsUser != null) {
-            throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
+        try {
+            log.info("开始用户注册流程");
+            
+            // 使用 Lambda QueryWrapper 检查用户是否存在（类型安全）
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getLogin, requestDTO.getLogin());
+            User existsUser = userMapper.selectOne(queryWrapper);
+            
+            if (existsUser != null) {
+                log.warn("用户注册失败：用户名已存在");
+                throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
+            }
+
+            User user = new User();
+            user.setLogin(requestDTO.getLogin());
+            user.setHashedPassword(requestDTO.getPassword());
+            user.setFirstname(requestDTO.getFirstname());
+            user.setLastname(requestDTO.getLastname());
+            userMapper.insert(user);
+
+            // 添加用户ID到上下文
+            MDC.put("userId", String.valueOf(user.getId()));
+            log.info("用户注册成功");
+
+            return UserConverter.INSTANCE.toUserRegisterResponseDTO(user);
+        } finally {
+            // 清理 MDC（重要：避免内存泄漏和上下文污染）
+            MDC.clear();
         }
-
-        User user = new User();
-        user.setLogin(requestDTO.getLogin());
-        user.setHashedPassword(requestDTO.getPassword());
-        user.setFirstname(requestDTO.getFirstname());
-        user.setLastname(requestDTO.getLastname());
-        userMapper.insert(user);
-
-        return UserConverter.INSTANCE.toUserRegisterResponseDTO(user);
     }
 
     /**
@@ -49,28 +68,44 @@ public class UserService {
      * @return 分页响应
      */
     public PageResponse<UserRegisterResponseDTO> listUsers(Integer current, Integer size, String login) {
-        // 创建分页对象（MyBatis Plus 分页从1开始）
-        Page<User> page = new Page<>(current, size);
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "list_users");
+        MDC.put("page", String.valueOf(current));
+        MDC.put("size", String.valueOf(size));
         
-        // 构建查询条件
-        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
-        if (login != null && !login.trim().isEmpty()) {
-            queryWrapper.like(User::getLogin, login);
+        try {
+            log.debug("开始查询用户列表，页码: {}, 每页大小: {}, 登录名过滤: {}", current, size, login);
+            
+            // 创建分页对象（MyBatis Plus 分页从1开始）
+            Page<User> page = new Page<>(current, size);
+            
+            // 构建查询条件
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            if (login != null && !login.trim().isEmpty()) {
+                queryWrapper.like(User::getLogin, login);
+            }
+            // 按创建时间倒序
+            queryWrapper.orderByDesc(User::getId);
+            
+            // 执行分页查询
+            Page<User> result = userMapper.selectPage(page, queryWrapper);
+            
+            // 添加查询结果到上下文
+            MDC.put("total", String.valueOf(result.getTotal()));
+            log.info("用户列表查询成功，共查询到 {} 条记录", result.getTotal());
+            
+            // 转换为响应 DTO
+            return PageResponse.of(
+                result.getRecords().stream()
+                    .map(UserConverter.INSTANCE::toUserRegisterResponseDTO)
+                    .toList(),
+                (int) result.getTotal(),
+                (int) result.getCurrent(),
+                (int) result.getSize()
+            );
+        } finally {
+            // 清理 MDC
+            MDC.clear();
         }
-        // 按创建时间倒序
-        queryWrapper.orderByDesc(User::getId);
-        
-        // 执行分页查询
-        Page<User> result = userMapper.selectPage(page, queryWrapper);
-        
-        // 转换为响应 DTO
-        return PageResponse.of(
-            result.getRecords().stream()
-                .map(UserConverter.INSTANCE::toUserRegisterResponseDTO)
-                .toList(),
-            (int) result.getTotal(),
-            (int) result.getCurrent(),
-            (int) result.getSize()
-        );
     }
 }
