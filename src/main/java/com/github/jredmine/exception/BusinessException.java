@@ -18,6 +18,15 @@ public class BusinessException extends RuntimeException {
         this.message = resultCode.getMessage();
     }
 
+    /**
+     * 使用ResultCode和自定义消息创建异常
+     */
+    public BusinessException(ResultCode resultCode, String customMessage) {
+        super(customMessage);
+        this.code = resultCode.getCode();
+        this.message = customMessage;
+    }
+
     public BusinessException(Integer code, String message) {
         super(message);
         this.code = code;
