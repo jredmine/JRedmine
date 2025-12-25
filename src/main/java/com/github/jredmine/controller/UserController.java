@@ -2,11 +2,13 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -35,6 +37,13 @@ public class UserController {
             @RequestParam(defaultValue = "10") Integer size,
             @RequestParam(required = false) String login) {
         PageResponse<UserRegisterResponseDTO> response = userService.listUsers(current, size, login);
+        return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "查询用户详情", description = "根据用户ID查询用户详细信息")
+    @GetMapping("/{id}")
+    public ApiResponse<UserDetailResponseDTO> getUserById(@PathVariable Long id) {
+        UserDetailResponseDTO response = userService.getUserById(id);
         return ApiResponse.success(response);
     }
 }

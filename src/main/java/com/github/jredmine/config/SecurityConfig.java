@@ -1,5 +1,8 @@
 package com.github.jredmine.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.enums.ResultCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,8 +15,12 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * Spring Security 配置
@@ -26,6 +33,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ObjectMapper objectMapper;
 
     /**
      * 安全过滤器链配置
@@ -50,9 +58,14 @@ public class SecurityConfig {
                         // 其他请求需要认证
                         .anyRequest().authenticated()
                 )
-                // 配置会话管理（使用    JWT，不需要Session）
+                // 配置会话管理（使用JWT，不需要Session）
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                // 配置异常处理：返回JSON格式的响应体
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(customAuthenticationEntryPoint())
+                        .accessDeniedHandler(customAccessDeniedHandler())
                 )
                 // 添加JWT认证过滤器（在UsernamePasswordAuthenticationFilter之前）
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -74,5 +87,43 @@ public class SecurityConfig {
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
+    }
+
+    /**
+     * 自定义认证入口点
+     * 当未认证的请求访问需要认证的资源时，返回401 JSON响应
+     */
+    @Bean
+    public AuthenticationEntryPoint customAuthenticationEntryPoint() {
+        return (request, response, authException) -> {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json;charset=UTF-8");
+            
+            ApiResponse<Void> apiResponse = ApiResponse.error(
+                    ResultCode.UNAUTHORIZED.getCode(),
+                    "未认证，请先登录"
+            );
+            
+            response.getWriter().write(objectMapper.writeValueAsString(apiResponse));
+        };
+    }
+
+    /**
+     * 自定义访问拒绝处理器
+     * 当已认证但无权限的请求访问资源时，返回403 JSON响应
+     */
+    @Bean
+    public AccessDeniedHandler customAccessDeniedHandler() {
+        return (request, response, accessDeniedException) -> {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setContentType("application/json;charset=UTF-8");
+            
+            ApiResponse<Void> apiResponse = ApiResponse.error(
+                    ResultCode.FORBIDDEN.getCode(),
+                    "无权限，访问被拒绝"
+            );
+            
+            response.getWriter().write(objectMapper.writeValueAsString(apiResponse));
+        };
     }
 }

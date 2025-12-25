@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserLoginResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.entity.User;
@@ -212,6 +213,38 @@ public class UserService {
                 (int) result.getCurrent(),
                 (int) result.getSize()
             );
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 根据ID查询用户详情
+     * 
+     * @param id 用户ID
+     * @return 用户详情
+     */
+    public UserDetailResponseDTO getUserById(Long id) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "get_user_by_id");
+        MDC.put("userId", String.valueOf(id));
+        
+        try {
+            log.debug("开始查询用户详情，用户ID: {}", id);
+            
+            // 查询用户
+            User user = userMapper.selectById(id);
+            
+            if (user == null) {
+                log.warn("用户不存在，用户ID: {}", id);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+            
+            log.info("用户详情查询成功，用户ID: {}", id);
+            
+            // 转换为响应 DTO
+            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
         } finally {
             // 清理 MDC
             MDC.clear();

@@ -5,6 +5,9 @@ import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -73,13 +76,8 @@ public class GlobalExceptionHandler {
     }
 
     // ========== Spring Security 相关异常处理 ==========
-    // 注意：以下异常处理需要启用 Spring Security 依赖后才能使用
-    // 启用 Spring Security 后，取消注释以下代码并添加相应的 import 语句
-
-    /*
-    import org.springframework.security.access.AccessDeniedException;
-    import org.springframework.security.authentication.BadCredentialsException;
-    import org.springframework.security.core.AuthenticationException;
+    // 注意：AuthenticationEntryPoint 在过滤器链中执行，@ControllerAdvice 无法捕获
+    // 但其他认证异常（如 Token 无效、权限不足等）可以被捕获
 
     @ExceptionHandler(AuthenticationException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
@@ -101,7 +99,6 @@ public class GlobalExceptionHandler {
         log.warn("访问拒绝: {}", e.getMessage());
         return ApiResponse.error(ResultCode.FORBIDDEN.getCode(), "访问被拒绝");
     }
-    */
 
     /**
      * 其他异常
@@ -113,4 +110,3 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(ResultCode.SYSTEM_ERROR.getCode(), "系统异常，请联系管理员");
     }
 }
-
