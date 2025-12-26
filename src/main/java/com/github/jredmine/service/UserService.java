@@ -250,4 +250,40 @@ public class UserService {
             MDC.clear();
         }
     }
+
+    /**
+     * 获取当前登录用户信息
+     * 根据用户名查询用户详情
+     * 
+     * @param username 用户名（登录名）
+     * @return 用户详情
+     */
+    public UserDetailResponseDTO getCurrentUser(String username) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "get_current_user");
+        MDC.put("username", username);
+        
+        try {
+            log.debug("开始查询当前用户信息，用户名: {}", username);
+            
+            // 根据登录名查询用户
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getLogin, username);
+            User user = userMapper.selectOne(queryWrapper);
+            
+            if (user == null) {
+                log.warn("用户不存在，用户名: {}", username);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+            
+            MDC.put("userId", String.valueOf(user.getId()));
+            log.info("当前用户信息查询成功，用户ID: {}", user.getId());
+            
+            // 转换为响应 DTO
+            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
 }

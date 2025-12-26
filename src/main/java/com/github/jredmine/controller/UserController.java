@@ -4,9 +4,14 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
+import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -44,6 +49,21 @@ public class UserController {
     @GetMapping("/{id}")
     public ApiResponse<UserDetailResponseDTO> getUserById(@PathVariable Long id) {
         UserDetailResponseDTO response = userService.getUserById(id);
+        return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "获取当前用户信息", description = "通过JWT Token获取当前登录用户的详细信息，无需传递用户ID", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/me")
+    public ApiResponse<UserDetailResponseDTO> getCurrentUser() {
+        // 从SecurityContext获取当前认证的用户名
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getName() == null
+                || "anonymousUser".equals(authentication.getName())) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "未认证，请先登录");
+        }
+
+        String username = authentication.getName();
+        UserDetailResponseDTO response = userService.getCurrentUser(username);
         return ApiResponse.success(response);
     }
 }
