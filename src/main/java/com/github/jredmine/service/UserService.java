@@ -7,6 +7,7 @@ import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
+import com.github.jredmine.dto.request.user.UserStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
@@ -16,6 +17,7 @@ import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.dto.converter.UserConverter;
 import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.enums.UserStatus;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.util.JwtUtils;
@@ -66,7 +68,7 @@ public class UserService {
                     requestDTO.getPassword(),
                     requestDTO.getFirstname(),
                     requestDTO.getLastname(),
-                    1, // status: 启用
+                    UserStatus.ACTIVE.getCode(), // status: 启用
                     false, // admin: 非管理员
                     "zh-CN", // language
                     "all" // mailNotification
@@ -107,7 +109,7 @@ public class UserService {
             }
 
             // 2. 检查用户状态
-            if (user.getStatus() == null || user.getStatus() != 1) {
+            if (user.getStatus() == null || !UserStatus.ACTIVE.getCode().equals(user.getStatus())) {
                 log.warn("用户登录失败：用户账号已被禁用");
                 throw new BusinessException(ResultCode.FORBIDDEN, "用户账号已被禁用");
             }
@@ -254,12 +256,17 @@ public class UserService {
             validateAndCheckUserInfo(requestDTO.getLogin(), requestDTO.getEmail());
 
             // 2. 创建用户（管理员创建可以自定义参数）
+            Integer status = requestDTO.getStatus();
+            if (status != null && UserStatus.fromCode(status) == null) {
+                log.warn("用户创建失败：状态值无效，状态: {}", status);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "用户状态值无效");
+            }
             User user = buildUser(
                     requestDTO.getLogin(),
                     requestDTO.getPassword(),
                     requestDTO.getFirstname(),
                     requestDTO.getLastname(),
-                    requestDTO.getStatus() != null ? requestDTO.getStatus() : 1,
+                    status != null ? status : UserStatus.ACTIVE.getCode(),
                     requestDTO.getAdmin() != null ? requestDTO.getAdmin() : false,
                     requestDTO.getLanguage() != null ? requestDTO.getLanguage() : "zh-CN",
                     requestDTO.getMailNotification() != null ? requestDTO.getMailNotification() : "all");
@@ -421,6 +428,62 @@ public class UserService {
     }
 
     /**
+     * 更新用户状态（启用/禁用）
+     * 
+     * @param id         用户ID
+     * @param requestDTO 状态更新请求
+     * @return 用户详情
+     */
+    public UserDetailResponseDTO updateUserStatus(Long id, UserStatusUpdateRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "update_user_status");
+        MDC.put("userId", String.valueOf(id));
+        MDC.put("status", String.valueOf(requestDTO.getStatus()));
+
+        try {
+            log.info("开始更新用户状态，用户ID: {}, 新状态: {}", id, requestDTO.getStatus());
+
+            // 1. 验证状态值
+            Integer status = requestDTO.getStatus();
+            UserStatus userStatus = UserStatus.fromCode(status);
+            if (status == null || userStatus == null) {
+                log.warn("用户状态更新失败：状态值无效，用户ID: {}, 状态: {}", id, status);
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        String.format("用户状态值无效，有效值为：%d(%s)、%d(%s)、%d(%s)",
+                                UserStatus.ACTIVE.getCode(), UserStatus.ACTIVE.getDescription(),
+                                UserStatus.LOCKED.getCode(), UserStatus.LOCKED.getDescription(),
+                                UserStatus.PENDING.getCode(), UserStatus.PENDING.getDescription()));
+            }
+
+            // 2. 查询用户是否存在
+            User user = userMapper.selectById(id);
+            if (user == null) {
+                log.warn("用户状态更新失败：用户不存在，用户ID: {}", id);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 3. 检查状态是否有变化
+            if (user.getStatus() != null && user.getStatus().equals(status)) {
+                log.debug("用户状态无变化，用户ID: {}, 状态: {}", id, status);
+                return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+            }
+
+            // 4. 更新用户状态
+            user.setStatus(status);
+            user.setUpdatedOn(new Date());
+            userMapper.updateById(user);
+
+            log.info("用户状态更新成功，用户ID: {}, 新状态: {}", id, status);
+
+            // 转换为响应 DTO
+            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
      * 获取当前登录用户信息
      * 根据用户名查询用户详情
      * 
@@ -503,7 +566,7 @@ public class UserService {
             }
 
             // 4. 检查用户状态
-            if (user.getStatus() == null || user.getStatus() != 1) {
+            if (user.getStatus() == null || !UserStatus.ACTIVE.getCode().equals(user.getStatus())) {
                 log.warn("Token刷新失败：用户账号已被禁用，用户ID: {}", userId);
                 throw new BusinessException(ResultCode.FORBIDDEN, "用户账号已被禁用");
             }
@@ -582,7 +645,7 @@ public class UserService {
             }
 
             // 5. 检查用户状态
-            if (user.getStatus() == null || user.getStatus() != 1) {
+            if (user.getStatus() == null || !UserStatus.ACTIVE.getCode().equals(user.getStatus())) {
                 log.warn("密码变更失败：用户账号已被禁用，用户ID: {}", user.getId());
                 throw new BusinessException(ResultCode.FORBIDDEN, "用户账号已被禁用");
             }

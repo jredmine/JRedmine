@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
+import com.github.jredmine.dto.request.user.UserStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
@@ -73,6 +74,15 @@ public class UserController {
             @Valid @RequestBody UserUpdateRequestDTO userUpdateRequestDTO) {
         UserDetailResponseDTO response = userService.updateUser(id, userUpdateRequestDTO);
         return ApiResponse.success("用户信息更新成功", response);
+    }
+
+    @Operation(summary = "更新用户状态", description = "启用/禁用/锁定用户账号，状态值：1=启用, 2=锁定, 3=待激活", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/{id}/status")
+    public ApiResponse<UserDetailResponseDTO> updateUserStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody UserStatusUpdateRequestDTO userStatusUpdateRequestDTO) {
+        UserDetailResponseDTO response = userService.updateUserStatus(id, userStatusUpdateRequestDTO);
+        return ApiResponse.success("用户状态更新成功", response);
     }
 
     @Operation(summary = "获取当前用户信息", description = "通过JWT Token获取当前登录用户的详细信息，无需传递用户ID", security = @SecurityRequirement(name = "bearerAuth"))
