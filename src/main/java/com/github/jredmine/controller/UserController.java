@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
+import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
@@ -17,6 +18,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -62,6 +64,15 @@ public class UserController {
     public ApiResponse<UserDetailResponseDTO> getUserById(@PathVariable Long id) {
         UserDetailResponseDTO response = userService.getUserById(id);
         return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "更新用户信息", description = "更新用户信息，可以更新名字、姓氏、管理员权限、用户状态等", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/{id}")
+    public ApiResponse<UserDetailResponseDTO> updateUser(
+            @PathVariable Long id,
+            @Valid @RequestBody UserUpdateRequestDTO userUpdateRequestDTO) {
+        UserDetailResponseDTO response = userService.updateUser(id, userUpdateRequestDTO);
+        return ApiResponse.success("用户信息更新成功", response);
     }
 
     @Operation(summary = "获取当前用户信息", description = "通过JWT Token获取当前登录用户的详细信息，无需传递用户ID", security = @SecurityRequirement(name = "bearerAuth"))

@@ -7,6 +7,7 @@ import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
+import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserListItemResponseDTO;
@@ -333,6 +334,90 @@ public class UserService {
         user.setCreatedOn(new Date());
         user.setUpdatedOn(new Date());
         return user;
+    }
+
+    /**
+     * 更新用户信息
+     * 
+     * @param id         用户ID
+     * @param requestDTO 用户更新请求
+     * @return 用户详情
+     */
+    public UserDetailResponseDTO updateUser(Long id, UserUpdateRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "update_user");
+        MDC.put("userId", String.valueOf(id));
+
+        try {
+            log.info("开始更新用户信息，用户ID: {}", id);
+
+            // 1. 查询用户是否存在
+            User user = userMapper.selectById(id);
+            if (user == null) {
+                log.warn("用户更新失败：用户不存在，用户ID: {}", id);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 2. 如果提供了邮箱，验证邮箱格式（如果邮箱有变化）
+            if (requestDTO.getEmail() != null && !requestDTO.getEmail().trim().isEmpty()) {
+                if (!EMAIL_PATTERN.matcher(requestDTO.getEmail()).matches()) {
+                    log.warn("用户更新失败：邮箱格式不正确，用户ID: {}", id);
+                    throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱格式不正确");
+                }
+                // TODO: 检查邮箱是否已被其他用户使用（需要email_addresses表支持）
+            }
+
+            // 3. 更新用户信息（只更新提供的字段）
+            boolean hasUpdate = false;
+
+            if (requestDTO.getFirstname() != null) {
+                user.setFirstname(requestDTO.getFirstname());
+                hasUpdate = true;
+            }
+
+            if (requestDTO.getLastname() != null) {
+                user.setLastname(requestDTO.getLastname());
+                hasUpdate = true;
+            }
+
+            // email 字段在 users 表中不存在，需要通过 email_addresses 表管理
+            // TODO: 实现邮箱更新逻辑（需要email_addresses表支持）
+
+            if (requestDTO.getAdmin() != null) {
+                user.setAdmin(requestDTO.getAdmin());
+                hasUpdate = true;
+            }
+
+            if (requestDTO.getStatus() != null) {
+                user.setStatus(requestDTO.getStatus());
+                hasUpdate = true;
+            }
+
+            if (requestDTO.getLanguage() != null) {
+                user.setLanguage(requestDTO.getLanguage());
+                hasUpdate = true;
+            }
+
+            if (requestDTO.getMailNotification() != null) {
+                user.setMailNotification(requestDTO.getMailNotification());
+                hasUpdate = true;
+            }
+
+            // 4. 如果有更新，保存到数据库
+            if (hasUpdate) {
+                user.setUpdatedOn(new Date());
+                userMapper.updateById(user);
+                log.info("用户信息更新成功，用户ID: {}", id);
+            } else {
+                log.debug("用户信息无变化，用户ID: {}", id);
+            }
+
+            // 转换为响应 DTO
+            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
     }
 
     /**
