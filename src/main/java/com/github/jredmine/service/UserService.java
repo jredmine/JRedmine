@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.jredmine.dto.request.user.PasswordChangeRequestDTO;
 import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
@@ -363,6 +364,67 @@ public class UserService {
             log.info("Token刷新成功，用户ID: {}", user.getId());
 
             return response;
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 用户变更密码
+     * 
+     * @param username   用户名（登录名）
+     * @param requestDTO 密码变更请求
+     */
+    public void changePassword(String username, PasswordChangeRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "change_password");
+        MDC.put("username", username);
+
+        try {
+            log.info("开始用户变更密码流程，用户名: {}", username);
+
+            // 1. 验证新密码和确认密码是否一致
+            if (!requestDTO.getNewPassword().equals(requestDTO.getConfirmNewPassword())) {
+                log.warn("密码变更失败：新密码和确认密码不匹配");
+                throw new BusinessException(ResultCode.PARAM_ERROR, "新密码和确认密码不匹配");
+            }
+
+            // 2. 验证新密码和旧密码不能相同
+            if (requestDTO.getOldPassword().equals(requestDTO.getNewPassword())) {
+                log.warn("密码变更失败：新密码不能与旧密码相同");
+                throw new BusinessException(ResultCode.PARAM_ERROR, "新密码不能与旧密码相同");
+            }
+
+            // 3. 查询用户
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getLogin, username);
+            User user = userMapper.selectOne(queryWrapper);
+
+            if (user == null) {
+                log.warn("密码变更失败：用户不存在，用户名: {}", username);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 4. 验证旧密码是否正确
+            if (!passwordEncoder.matches(requestDTO.getOldPassword(), user.getHashedPassword())) {
+                log.warn("密码变更失败：旧密码错误，用户ID: {}", user.getId());
+                throw new BusinessException(ResultCode.PASSWORD_ERROR, "旧密码错误");
+            }
+
+            // 5. 检查用户状态
+            if (user.getStatus() == null || user.getStatus() != 1) {
+                log.warn("密码变更失败：用户账号已被禁用，用户ID: {}", user.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "用户账号已被禁用");
+            }
+
+            // 6. 更新密码
+            user.setHashedPassword(passwordEncoder.encode(requestDTO.getNewPassword()));
+            user.setUpdatedOn(new Date());
+            userMapper.updateById(user);
+
+            MDC.put("userId", String.valueOf(user.getId()));
+            log.info("密码变更成功，用户ID: {}", user.getId());
         } finally {
             // 清理 MDC
             MDC.clear();

@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.user.PasswordChangeRequestDTO;
 import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
@@ -7,9 +8,14 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.user.UserLoginResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.service.UserService;
+import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.exception.BusinessException;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -55,5 +61,20 @@ public class AuthController {
         UserLoginResponseDTO response = userService.refreshToken(tokenRefreshRequestDTO);
         return ApiResponse.success("Token刷新成功", response);
     }
-}
 
+    @Operation(summary = "变更密码", description = "用户变更密码，需要提供旧密码和新密码", security = @SecurityRequirement(name = "bearerAuth"))
+    @PostMapping("/change-password")
+    public ApiResponse<Void> changePassword(
+            @Valid @RequestBody PasswordChangeRequestDTO passwordChangeRequestDTO) {
+        // 从SecurityContext获取当前认证的用户名
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getName() == null
+                || "anonymousUser".equals(authentication.getName())) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "未认证，请先登录");
+        }
+
+        String username = authentication.getName();
+        userService.changePassword(username, passwordChangeRequestDTO);
+        return ApiResponse.success("密码变更成功", null);
+    }
+}
