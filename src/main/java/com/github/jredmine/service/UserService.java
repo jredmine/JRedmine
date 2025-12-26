@@ -14,11 +14,13 @@ import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserListItemResponseDTO;
 import com.github.jredmine.dto.response.user.UserLoginResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
+import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.dto.converter.UserConverter;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.enums.UserStatus;
 import com.github.jredmine.exception.BusinessException;
+import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.util.JwtUtils;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +37,7 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class UserService {
     private final UserMapper userMapper;
+    private final EmailAddressMapper emailAddressMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
 
@@ -75,6 +78,9 @@ public class UserService {
             );
 
             userMapper.insert(user);
+
+            // 保存邮箱地址到 email_addresses 表
+            saveEmailAddress(user.getId(), requestDTO.getEmail(), true);
 
             // 添加用户ID到上下文
             MDC.put("userId", String.valueOf(user.getId()));
@@ -136,7 +142,7 @@ public class UserService {
                     .login(user.getLogin())
                     .firstname(user.getFirstname())
                     .lastname(user.getLastname())
-                    .email("") // TODO: 从email_addresses表查询
+                    .email(getUserEmail(user.getId()))
                     .admin(user.getAdmin())
                     .status(user.getStatus())
                     .build();
@@ -279,6 +285,9 @@ public class UserService {
 
             userMapper.insert(user);
 
+            // 保存邮箱地址到 email_addresses 表
+            saveEmailAddress(user.getId(), requestDTO.getEmail(), true);
+
             // 添加用户ID到上下文
             MDC.put("userId", String.valueOf(user.getId()));
             log.info("用户创建成功，用户ID: {}", user.getId());
@@ -316,8 +325,15 @@ public class UserService {
             throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
         }
 
-        // 3. 检查邮箱是否已存在（TODO: 需要email_addresses表支持，暂时跳过）
-        // TODO: 实现邮箱唯一性检查
+        // 3. 检查邮箱是否已存在（从 email_addresses 表查询）
+        LambdaQueryWrapper<EmailAddress> emailQueryWrapper = new LambdaQueryWrapper<>();
+        emailQueryWrapper.eq(EmailAddress::getAddress, email);
+        EmailAddress existsEmail = emailAddressMapper.selectOne(emailQueryWrapper);
+
+        if (existsEmail != null) {
+            log.warn("用户操作失败：邮箱已被使用");
+            throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱已被使用");
+        }
     }
 
     /**
@@ -375,17 +391,31 @@ public class UserService {
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
-            // 2. 如果提供了邮箱，验证邮箱格式（如果邮箱有变化）
+            // 2. 如果提供了邮箱，验证并更新邮箱
+            boolean hasUpdate = false;
             if (requestDTO.getEmail() != null && !requestDTO.getEmail().trim().isEmpty()) {
                 if (!EMAIL_PATTERN.matcher(requestDTO.getEmail()).matches()) {
                     log.warn("用户更新失败：邮箱格式不正确，用户ID: {}", id);
                     throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱格式不正确");
                 }
-                // TODO: 检查邮箱是否已被其他用户使用（需要email_addresses表支持）
+
+                // 检查邮箱是否已被其他用户使用
+                LambdaQueryWrapper<EmailAddress> emailQueryWrapper = new LambdaQueryWrapper<>();
+                emailQueryWrapper.eq(EmailAddress::getAddress, requestDTO.getEmail());
+                emailQueryWrapper.ne(EmailAddress::getUserId, id);
+                EmailAddress existsEmail = emailAddressMapper.selectOne(emailQueryWrapper);
+
+                if (existsEmail != null) {
+                    log.warn("用户更新失败：邮箱已被其他用户使用，用户ID: {}", id);
+                    throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱已被其他用户使用");
+                }
+
+                // 更新或创建邮箱地址
+                updateOrCreateEmailAddress(id, requestDTO.getEmail());
+                hasUpdate = true;
             }
 
             // 3. 更新用户信息（只更新提供的字段）
-            boolean hasUpdate = false;
 
             if (requestDTO.getFirstname() != null) {
                 user.setFirstname(requestDTO.getFirstname());
@@ -397,8 +427,7 @@ public class UserService {
                 hasUpdate = true;
             }
 
-            // email 字段在 users 表中不存在，需要通过 email_addresses 表管理
-            // TODO: 实现邮箱更新逻辑（需要email_addresses表支持）
+            // email 字段在 users 表中不存在，已通过 email_addresses 表管理（见步骤2）
 
             if (requestDTO.getAdmin() != null) {
                 user.setAdmin(requestDTO.getAdmin());
@@ -598,7 +627,7 @@ public class UserService {
                     .login(user.getLogin())
                     .firstname(user.getFirstname())
                     .lastname(user.getLastname())
-                    .email("") // TODO: 从email_addresses表查询
+                    .email(getUserEmail(user.getId()))
                     .admin(user.getAdmin())
                     .status(user.getStatus())
                     .build();
@@ -715,5 +744,64 @@ public class UserService {
             // 清理 MDC
             MDC.clear();
         }
+    }
+
+    /**
+     * 保存邮箱地址到 email_addresses 表
+     * 
+     * @param userId    用户ID
+     * @param email     邮箱地址
+     * @param isDefault 是否默认邮箱
+     */
+    private void saveEmailAddress(Long userId, String email, Boolean isDefault) {
+        EmailAddress emailAddress = new EmailAddress();
+        emailAddress.setUserId(userId);
+        emailAddress.setAddress(email);
+        emailAddress.setIsDefault(isDefault != null ? isDefault : true);
+        emailAddress.setNotify(true);
+        emailAddress.setCreatedOn(new Date());
+        emailAddress.setUpdatedOn(new Date());
+        emailAddressMapper.insert(emailAddress);
+        log.debug("邮箱地址保存成功，用户ID: {}, 邮箱: {}", userId, email);
+    }
+
+    /**
+     * 更新或创建邮箱地址
+     * 如果用户已有默认邮箱，则更新；否则创建新邮箱
+     * 
+     * @param userId 用户ID
+     * @param email  邮箱地址
+     */
+    private void updateOrCreateEmailAddress(Long userId, String email) {
+        // 查询用户是否已有默认邮箱
+        LambdaQueryWrapper<EmailAddress> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(EmailAddress::getUserId, userId);
+        queryWrapper.eq(EmailAddress::getIsDefault, true);
+        EmailAddress existingEmail = emailAddressMapper.selectOne(queryWrapper);
+
+        if (existingEmail != null) {
+            // 更新现有默认邮箱
+            existingEmail.setAddress(email);
+            existingEmail.setUpdatedOn(new Date());
+            emailAddressMapper.updateById(existingEmail);
+            log.debug("邮箱地址更新成功，用户ID: {}, 新邮箱: {}", userId, email);
+        } else {
+            // 创建新邮箱（设为默认）
+            saveEmailAddress(userId, email, true);
+        }
+    }
+
+    /**
+     * 获取用户的默认邮箱地址
+     * 
+     * @param userId 用户ID
+     * @return 邮箱地址，如果不存在则返回空字符串
+     */
+    private String getUserEmail(Long userId) {
+        LambdaQueryWrapper<EmailAddress> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(EmailAddress::getUserId, userId);
+        queryWrapper.eq(EmailAddress::getIsDefault, true);
+        EmailAddress emailAddress = emailAddressMapper.selectOne(queryWrapper);
+        return emailAddress != null ? emailAddress.getAddress() : "";
     }
 }
