@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -33,8 +34,7 @@ public class UserService {
 
     // 邮箱格式验证正则表达式
     private static final Pattern EMAIL_PATTERN = Pattern.compile(
-            "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
-    );
+            "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
 
     /**
      * 用户注册
@@ -43,10 +43,10 @@ public class UserService {
         // 使用 MDC 添加上下文信息（用于结构化日志）
         MDC.put("operation", "user_register");
         MDC.put("login", requestDTO.getLogin());
-        
+
         try {
             log.info("开始用户注册流程");
-            
+
             // 1. 验证密码确认
             if (!requestDTO.getPassword().equals(requestDTO.getConfirmPassword())) {
                 log.warn("用户注册失败：密码和确认密码不匹配");
@@ -63,7 +63,7 @@ public class UserService {
             LambdaQueryWrapper<User> loginQueryWrapper = new LambdaQueryWrapper<>();
             loginQueryWrapper.eq(User::getLogin, requestDTO.getLogin());
             User existsUserByLogin = userMapper.selectOne(loginQueryWrapper);
-            
+
             if (existsUserByLogin != null) {
                 log.warn("用户注册失败：用户名已存在");
                 throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
@@ -85,7 +85,7 @@ public class UserService {
             user.setMailNotification("all"); // 默认邮件通知设置
             user.setCreatedOn(new Date());
             user.setUpdatedOn(new Date());
-            
+
             userMapper.insert(user);
 
             // 添加用户ID到上下文
@@ -106,15 +106,15 @@ public class UserService {
         // 使用 MDC 添加上下文信息
         MDC.put("operation", "user_login");
         MDC.put("login", requestDTO.getLogin());
-        
+
         try {
             log.info("开始用户登录流程");
-            
+
             // 1. 查询用户
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.eq(User::getLogin, requestDTO.getLogin());
             User user = userMapper.selectOne(queryWrapper);
-            
+
             if (user == null) {
                 log.warn("用户登录失败：用户不存在");
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
@@ -173,8 +173,8 @@ public class UserService {
      * 分页查询用户列表
      * 
      * @param current 当前页码（从1开始）
-     * @param size 每页大小
-     * @param login 登录名（可选，用于模糊查询）
+     * @param size    每页大小
+     * @param login   登录名（可选，用于模糊查询）
      * @return 分页响应
      */
     public PageResponse<UserRegisterResponseDTO> listUsers(Integer current, Integer size, String login) {
@@ -182,13 +182,13 @@ public class UserService {
         MDC.put("operation", "list_users");
         MDC.put("page", String.valueOf(current));
         MDC.put("size", String.valueOf(size));
-        
+
         try {
             log.debug("开始查询用户列表，页码: {}, 每页大小: {}, 登录名过滤: {}", current, size, login);
-            
+
             // 创建分页对象（MyBatis Plus 分页从1开始）
             Page<User> page = new Page<>(current, size);
-            
+
             // 构建查询条件
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
             if (login != null && !login.trim().isEmpty()) {
@@ -196,23 +196,22 @@ public class UserService {
             }
             // 按创建时间倒序
             queryWrapper.orderByDesc(User::getId);
-            
+
             // 执行分页查询
             Page<User> result = userMapper.selectPage(page, queryWrapper);
-            
+
             // 添加查询结果到上下文
             MDC.put("total", String.valueOf(result.getTotal()));
             log.info("用户列表查询成功，共查询到 {} 条记录", result.getTotal());
-            
+
             // 转换为响应 DTO
             return PageResponse.of(
-                result.getRecords().stream()
-                    .map(UserConverter.INSTANCE::toUserRegisterResponseDTO)
-                    .toList(),
-                (int) result.getTotal(),
-                (int) result.getCurrent(),
-                (int) result.getSize()
-            );
+                    result.getRecords().stream()
+                            .map(UserConverter.INSTANCE::toUserRegisterResponseDTO)
+                            .toList(),
+                    (int) result.getTotal(),
+                    (int) result.getCurrent(),
+                    (int) result.getSize());
         } finally {
             // 清理 MDC
             MDC.clear();
@@ -229,20 +228,20 @@ public class UserService {
         // 使用 MDC 添加上下文信息
         MDC.put("operation", "get_user_by_id");
         MDC.put("userId", String.valueOf(id));
-        
+
         try {
             log.debug("开始查询用户详情，用户ID: {}", id);
-            
+
             // 查询用户
             User user = userMapper.selectById(id);
-            
+
             if (user == null) {
                 log.warn("用户不存在，用户ID: {}", id);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
-            
+
             log.info("用户详情查询成功，用户ID: {}", id);
-            
+
             // 转换为响应 DTO
             return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
         } finally {
@@ -262,25 +261,108 @@ public class UserService {
         // 使用 MDC 添加上下文信息
         MDC.put("operation", "get_current_user");
         MDC.put("username", username);
-        
+
         try {
             log.debug("开始查询当前用户信息，用户名: {}", username);
-            
+
             // 根据登录名查询用户
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.eq(User::getLogin, username);
             User user = userMapper.selectOne(queryWrapper);
-            
+
             if (user == null) {
                 log.warn("用户不存在，用户名: {}", username);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
-            
+
             MDC.put("userId", String.valueOf(user.getId()));
             log.info("当前用户信息查询成功，用户ID: {}", user.getId());
-            
+
             // 转换为响应 DTO
             return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 刷新JWT Token
+     * 
+     * @param requestDTO Token刷新请求
+     * @return 新的Token和用户信息
+     */
+    public UserLoginResponseDTO refreshToken(TokenRefreshRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "refresh_token");
+
+        try {
+            log.info("开始刷新Token流程");
+
+            String token = requestDTO.getToken();
+
+            // 1. 验证Token是否有效（即使快过期也可以，只要还没过期）
+            if (!jwtUtils.validateToken(token)) {
+                log.warn("Token刷新失败：Token无效或已过期");
+                throw new BusinessException(ResultCode.UNAUTHORIZED, "Token无效或已过期");
+            }
+
+            // 2. 从Token中提取用户信息
+            String username = jwtUtils.extractUsername(token);
+            Long userId = jwtUtils.extractUserId(token);
+
+            if (username == null || userId == null) {
+                log.warn("Token刷新失败：无法从Token中提取用户信息");
+                throw new BusinessException(ResultCode.UNAUTHORIZED, "Token格式错误");
+            }
+
+            MDC.put("username", username);
+            MDC.put("userId", String.valueOf(userId));
+
+            // 3. 验证用户是否存在且状态正常
+            User user = userMapper.selectById(userId);
+            if (user == null) {
+                log.warn("Token刷新失败：用户不存在，用户ID: {}", userId);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 验证用户名是否匹配（防止Token被篡改）
+            if (!user.getLogin().equals(username)) {
+                log.warn("Token刷新失败：用户名不匹配");
+                throw new BusinessException(ResultCode.UNAUTHORIZED, "Token无效");
+            }
+
+            // 4. 检查用户状态
+            if (user.getStatus() == null || user.getStatus() != 1) {
+                log.warn("Token刷新失败：用户账号已被禁用，用户ID: {}", userId);
+                throw new BusinessException(ResultCode.FORBIDDEN, "用户账号已被禁用");
+            }
+
+            // 5. 生成新的JWT Token
+            String newToken = jwtUtils.generateToken(user.getLogin(), user.getId());
+            long expiresIn = jwtUtils.extractExpiration(newToken).getTime() - System.currentTimeMillis();
+
+            // 6. 构建响应
+            UserLoginResponseDTO.UserInfo userInfo = UserLoginResponseDTO.UserInfo.builder()
+                    .id(user.getId())
+                    .login(user.getLogin())
+                    .firstname(user.getFirstname())
+                    .lastname(user.getLastname())
+                    .email("") // TODO: 从email_addresses表查询
+                    .admin(user.getAdmin())
+                    .status(user.getStatus())
+                    .build();
+
+            UserLoginResponseDTO response = UserLoginResponseDTO.builder()
+                    .token(newToken)
+                    .tokenType("Bearer")
+                    .expiresIn(expiresIn / 1000) // 转换为秒
+                    .user(userInfo)
+                    .build();
+
+            log.info("Token刷新成功，用户ID: {}", user.getId());
+
+            return response;
         } finally {
             // 清理 MDC
             MDC.clear();

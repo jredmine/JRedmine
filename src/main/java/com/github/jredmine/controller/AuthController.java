@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
@@ -45,6 +46,14 @@ public class AuthController {
             @Valid @RequestBody UserLoginRequestDTO userLoginRequestDTO) {
         UserLoginResponseDTO response = userService.login(userLoginRequestDTO);
         return ApiResponse.success("登录成功", response);
+    }
+
+    @Operation(summary = "刷新Token", description = "刷新JWT Token，返回新的Token和用户信息")
+    @PostMapping("/refresh")
+    public ApiResponse<UserLoginResponseDTO> refreshToken(
+            @Valid @RequestBody TokenRefreshRequestDTO tokenRefreshRequestDTO) {
+        UserLoginResponseDTO response = userService.refreshToken(tokenRefreshRequestDTO);
+        return ApiResponse.success("Token刷新成功", response);
     }
 }
 

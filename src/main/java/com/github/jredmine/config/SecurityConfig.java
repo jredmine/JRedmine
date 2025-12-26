@@ -48,6 +48,7 @@ public class SecurityConfig {
                         // 允许公开访问的接口
                         .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
                         // Swagger相关接口允许访问
                         .requestMatchers(
                                 "/swagger-ui/**",
