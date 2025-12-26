@@ -16,6 +16,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -83,6 +84,13 @@ public class UserController {
             @Valid @RequestBody UserStatusUpdateRequestDTO userStatusUpdateRequestDTO) {
         UserDetailResponseDTO response = userService.updateUserStatus(id, userStatusUpdateRequestDTO);
         return ApiResponse.success("用户状态更新成功", response);
+    }
+
+    @Operation(summary = "删除用户", description = "软删除用户，设置删除时间，用户数据不会被物理删除", security = @SecurityRequirement(name = "bearerAuth"))
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteUser(@PathVariable Long id) {
+        userService.deleteUser(id);
+        return ApiResponse.success("用户删除成功", null);
     }
 
     @Operation(summary = "获取当前用户信息", description = "通过JWT Token获取当前登录用户的详细信息，无需传递用户ID", security = @SecurityRequirement(name = "bearerAuth"))

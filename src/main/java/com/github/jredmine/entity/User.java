@@ -52,4 +52,10 @@ public class User {
     private Integer twofaTotpLastUsedAt;
 
     private Boolean twofaRequired = false;
+
+    /**
+     * 删除时间（软删除）
+     * NULL表示未删除，有值表示删除时间
+     */
+    private Date deletedAt;
 }

@@ -98,13 +98,14 @@ public class UserService {
         try {
             log.info("开始用户登录流程");
 
-            // 1. 查询用户
+            // 1. 查询用户（排除已删除的用户）
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.eq(User::getLogin, requestDTO.getLogin());
+            queryWrapper.isNull(User::getDeletedAt);
             User user = userMapper.selectOne(queryWrapper);
 
             if (user == null) {
-                log.warn("用户登录失败：用户不存在");
+                log.warn("用户登录失败：用户不存在或已删除");
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -179,6 +180,8 @@ public class UserService {
 
             // 构建查询条件
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            // 过滤已删除的用户（软删除）
+            queryWrapper.isNull(User::getDeletedAt);
             if (login != null && !login.trim().isEmpty()) {
                 queryWrapper.like(User::getLogin, login);
             }
@@ -220,11 +223,14 @@ public class UserService {
         try {
             log.debug("开始查询用户详情，用户ID: {}", id);
 
-            // 查询用户
-            User user = userMapper.selectById(id);
+            // 查询用户（排除已删除的用户）
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getId, id);
+            queryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(queryWrapper);
 
             if (user == null) {
-                log.warn("用户不存在，用户ID: {}", id);
+                log.warn("用户不存在或已删除，用户ID: {}", id);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -299,9 +305,10 @@ public class UserService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱格式不正确");
         }
 
-        // 2. 检查用户名是否已存在
+        // 2. 检查用户名是否已存在（排除已删除的用户，已删除的用户名可以被重新使用）
         LambdaQueryWrapper<User> loginQueryWrapper = new LambdaQueryWrapper<>();
         loginQueryWrapper.eq(User::getLogin, login);
+        loginQueryWrapper.isNull(User::getDeletedAt);
         User existsUserByLogin = userMapper.selectOne(loginQueryWrapper);
 
         if (existsUserByLogin != null) {
@@ -358,10 +365,13 @@ public class UserService {
         try {
             log.info("开始更新用户信息，用户ID: {}", id);
 
-            // 1. 查询用户是否存在
-            User user = userMapper.selectById(id);
+            // 1. 查询用户是否存在（排除已删除的用户）
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getId, id);
+            queryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(queryWrapper);
             if (user == null) {
-                log.warn("用户更新失败：用户不存在，用户ID: {}", id);
+                log.warn("用户更新失败：用户不存在或已删除，用户ID: {}", id);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -455,10 +465,13 @@ public class UserService {
                                 UserStatus.PENDING.getCode(), UserStatus.PENDING.getDescription()));
             }
 
-            // 2. 查询用户是否存在
-            User user = userMapper.selectById(id);
+            // 2. 查询用户是否存在（排除已删除的用户）
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getId, id);
+            queryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(queryWrapper);
             if (user == null) {
-                log.warn("用户状态更新失败：用户不存在，用户ID: {}", id);
+                log.warn("用户状态更新失败：用户不存在或已删除，用户ID: {}", id);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -498,13 +511,14 @@ public class UserService {
         try {
             log.debug("开始查询当前用户信息，用户名: {}", username);
 
-            // 根据登录名查询用户
+            // 根据登录名查询用户（排除已删除的用户）
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.eq(User::getLogin, username);
+            queryWrapper.isNull(User::getDeletedAt);
             User user = userMapper.selectOne(queryWrapper);
 
             if (user == null) {
-                log.warn("用户不存在，用户名: {}", username);
+                log.warn("用户不存在或已删除，用户名: {}", username);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -552,10 +566,13 @@ public class UserService {
             MDC.put("username", username);
             MDC.put("userId", String.valueOf(userId));
 
-            // 3. 验证用户是否存在且状态正常
-            User user = userMapper.selectById(userId);
+            // 3. 验证用户是否存在且状态正常（排除已删除的用户）
+            LambdaQueryWrapper<User> userQueryWrapper = new LambdaQueryWrapper<>();
+            userQueryWrapper.eq(User::getId, userId);
+            userQueryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(userQueryWrapper);
             if (user == null) {
-                log.warn("Token刷新失败：用户不存在，用户ID: {}", userId);
+                log.warn("Token刷新失败：用户不存在或已删除，用户ID: {}", userId);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -628,13 +645,14 @@ public class UserService {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "新密码不能与旧密码相同");
             }
 
-            // 3. 查询用户
+            // 3. 查询用户（排除已删除的用户）
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.eq(User::getLogin, username);
+            queryWrapper.isNull(User::getDeletedAt);
             User user = userMapper.selectOne(queryWrapper);
 
             if (user == null) {
-                log.warn("密码变更失败：用户不存在，用户名: {}", username);
+                log.warn("密码变更失败：用户不存在或已删除，用户名: {}", username);
                 throw new BusinessException(ResultCode.USER_NOT_FOUND);
             }
 
@@ -657,6 +675,42 @@ public class UserService {
 
             MDC.put("userId", String.valueOf(user.getId()));
             log.info("密码变更成功，用户ID: {}", user.getId());
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 软删除用户
+     * 
+     * @param id 用户ID
+     */
+    public void deleteUser(Long id) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "delete_user");
+        MDC.put("userId", String.valueOf(id));
+
+        try {
+            log.info("开始软删除用户，用户ID: {}", id);
+
+            // 1. 查询用户是否存在（排除已删除的用户）
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getId, id);
+            queryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(queryWrapper);
+
+            if (user == null) {
+                log.warn("用户删除失败：用户不存在或已删除，用户ID: {}", id);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 2. 执行软删除（设置删除时间）
+            user.setDeletedAt(new Date());
+            user.setUpdatedOn(new Date());
+            userMapper.updateById(user);
+
+            log.info("用户软删除成功，用户ID: {}", id);
         } finally {
             // 清理 MDC
             MDC.clear();
