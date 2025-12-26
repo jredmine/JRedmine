@@ -6,6 +6,7 @@ import com.github.jredmine.dto.request.user.PasswordChangeRequestDTO;
 import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
+import com.github.jredmine.dto.request.user.UserPreferenceUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.request.user.UserStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
@@ -13,15 +14,18 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserListItemResponseDTO;
 import com.github.jredmine.dto.response.user.UserLoginResponseDTO;
+import com.github.jredmine.dto.response.user.UserPreferenceResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.User;
+import com.github.jredmine.entity.UserPreference;
 import com.github.jredmine.dto.converter.UserConverter;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.enums.UserStatus;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.UserMapper;
+import com.github.jredmine.mapper.user.UserPreferenceMapper;
 import com.github.jredmine.util.JwtUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +42,7 @@ import java.util.regex.Pattern;
 public class UserService {
     private final UserMapper userMapper;
     private final EmailAddressMapper emailAddressMapper;
+    private final UserPreferenceMapper userPreferenceMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
 
@@ -803,5 +808,142 @@ public class UserService {
         queryWrapper.eq(EmailAddress::getIsDefault, true);
         EmailAddress emailAddress = emailAddressMapper.selectOne(queryWrapper);
         return emailAddress != null ? emailAddress.getAddress() : "";
+    }
+
+    /**
+     * 获取用户偏好设置
+     * 
+     * @param userId 用户ID
+     * @return 用户偏好设置
+     */
+    public UserPreferenceResponseDTO getUserPreference(Long userId) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "get_user_preference");
+        MDC.put("userId", String.valueOf(userId));
+
+        try {
+            log.debug("开始查询用户偏好设置，用户ID: {}", userId);
+
+            // 验证用户是否存在（排除已删除的用户）
+            LambdaQueryWrapper<User> userQueryWrapper = new LambdaQueryWrapper<>();
+            userQueryWrapper.eq(User::getId, userId);
+            userQueryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(userQueryWrapper);
+
+            if (user == null) {
+                log.warn("用户偏好设置查询失败：用户不存在或已删除，用户ID: {}", userId);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 查询用户偏好设置
+            LambdaQueryWrapper<UserPreference> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(UserPreference::getUserId, userId);
+            UserPreference preference = userPreferenceMapper.selectOne(queryWrapper);
+
+            // 如果不存在，返回默认值
+            if (preference == null) {
+                UserPreferenceResponseDTO response = new UserPreferenceResponseDTO();
+                response.setUserId(userId);
+                response.setHideMail(true); // 默认隐藏邮箱
+                response.setTimeZone(null);
+                response.setOthers(null);
+                log.debug("用户偏好设置不存在，返回默认值，用户ID: {}", userId);
+                return response;
+            }
+
+            // 转换为响应 DTO
+            UserPreferenceResponseDTO response = new UserPreferenceResponseDTO();
+            response.setUserId(preference.getUserId());
+            response.setHideMail(preference.getHideMail());
+            response.setTimeZone(preference.getTimeZone());
+            response.setOthers(preference.getOthers());
+
+            log.info("用户偏好设置查询成功，用户ID: {}", userId);
+            return response;
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 更新用户偏好设置
+     * 
+     * @param userId     用户ID
+     * @param requestDTO 偏好设置更新请求
+     * @return 更新后的用户偏好设置
+     */
+    public UserPreferenceResponseDTO updateUserPreference(Long userId, UserPreferenceUpdateRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "update_user_preference");
+        MDC.put("userId", String.valueOf(userId));
+
+        try {
+            log.info("开始更新用户偏好设置，用户ID: {}", userId);
+
+            // 1. 验证用户是否存在（排除已删除的用户）
+            LambdaQueryWrapper<User> userQueryWrapper = new LambdaQueryWrapper<>();
+            userQueryWrapper.eq(User::getId, userId);
+            userQueryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(userQueryWrapper);
+
+            if (user == null) {
+                log.warn("用户偏好设置更新失败：用户不存在或已删除，用户ID: {}", userId);
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 2. 查询是否已存在偏好设置
+            LambdaQueryWrapper<UserPreference> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(UserPreference::getUserId, userId);
+            UserPreference preference = userPreferenceMapper.selectOne(queryWrapper);
+
+            if (preference == null) {
+                // 创建新的偏好设置
+                preference = new UserPreference();
+                preference.setUserId(userId);
+                preference.setHideMail(requestDTO.getHideMail() != null ? requestDTO.getHideMail() : true);
+                preference.setTimeZone(requestDTO.getTimeZone());
+                preference.setOthers(requestDTO.getOthers());
+                userPreferenceMapper.insert(preference);
+                log.info("用户偏好设置创建成功，用户ID: {}", userId);
+            } else {
+                // 更新现有偏好设置（只更新提供的字段）
+                boolean hasUpdate = false;
+
+                if (requestDTO.getHideMail() != null) {
+                    preference.setHideMail(requestDTO.getHideMail());
+                    hasUpdate = true;
+                }
+
+                if (requestDTO.getTimeZone() != null) {
+                    preference.setTimeZone(requestDTO.getTimeZone());
+                    hasUpdate = true;
+                }
+
+                if (requestDTO.getOthers() != null) {
+                    preference.setOthers(requestDTO.getOthers());
+                    hasUpdate = true;
+                }
+
+                if (hasUpdate) {
+                    userPreferenceMapper.updateById(preference);
+                    log.info("用户偏好设置更新成功，用户ID: {}", userId);
+                } else {
+                    log.debug("用户偏好设置无变化，用户ID: {}", userId);
+                }
+            }
+
+            // 转换为响应 DTO
+            UserPreferenceResponseDTO response = new UserPreferenceResponseDTO();
+            response.setUserId(preference.getUserId());
+            response.setHideMail(preference.getHideMail());
+            response.setTimeZone(preference.getTimeZone());
+            response.setOthers(preference.getOthers());
+
+            return response;
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
     }
 }

@@ -1,12 +1,14 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
+import com.github.jredmine.dto.request.user.UserPreferenceUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
 import com.github.jredmine.dto.response.user.UserListItemResponseDTO;
+import com.github.jredmine.dto.response.user.UserPreferenceResponseDTO;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.service.UserService;
@@ -106,5 +108,57 @@ public class UserController {
         String username = authentication.getName();
         UserDetailResponseDTO response = userService.getCurrentUser(username);
         return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "获取用户偏好设置", description = "获取指定用户的偏好设置（时区、隐藏邮箱等）", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/{id}/preferences")
+    public ApiResponse<UserPreferenceResponseDTO> getUserPreference(@PathVariable Long id) {
+        UserPreferenceResponseDTO response = userService.getUserPreference(id);
+        return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "更新用户偏好设置", description = "更新指定用户的偏好设置（时区、隐藏邮箱等）", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/{id}/preferences")
+    public ApiResponse<UserPreferenceResponseDTO> updateUserPreference(
+            @PathVariable Long id,
+            @Valid @RequestBody UserPreferenceUpdateRequestDTO userPreferenceUpdateRequestDTO) {
+        UserPreferenceResponseDTO response = userService.updateUserPreference(id, userPreferenceUpdateRequestDTO);
+        return ApiResponse.success("用户偏好设置更新成功", response);
+    }
+
+    @Operation(summary = "获取当前用户偏好设置", description = "获取当前登录用户的偏好设置", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/me/preferences")
+    public ApiResponse<UserPreferenceResponseDTO> getCurrentUserPreference() {
+        // 从SecurityContext获取当前认证的用户名
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getName() == null
+                || "anonymousUser".equals(authentication.getName())) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "未认证，请先登录");
+        }
+
+        String username = authentication.getName();
+        // 先获取用户ID
+        UserDetailResponseDTO userDetail = userService.getCurrentUser(username);
+        UserPreferenceResponseDTO response = userService.getUserPreference(userDetail.getId());
+        return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "更新当前用户偏好设置", description = "更新当前登录用户的偏好设置", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/me/preferences")
+    public ApiResponse<UserPreferenceResponseDTO> updateCurrentUserPreference(
+            @Valid @RequestBody UserPreferenceUpdateRequestDTO userPreferenceUpdateRequestDTO) {
+        // 从SecurityContext获取当前认证的用户名
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getName() == null
+                || "anonymousUser".equals(authentication.getName())) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "未认证，请先登录");
+        }
+
+        String username = authentication.getName();
+        // 先获取用户ID
+        UserDetailResponseDTO userDetail = userService.getCurrentUser(username);
+        UserPreferenceResponseDTO response = userService.updateUserPreference(userDetail.getId(),
+                userPreferenceUpdateRequestDTO);
+        return ApiResponse.success("用户偏好设置更新成功", response);
     }
 }
