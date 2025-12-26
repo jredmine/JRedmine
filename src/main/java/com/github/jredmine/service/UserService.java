@@ -3,6 +3,8 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.user.PasswordChangeRequestDTO;
+import com.github.jredmine.dto.request.user.PasswordResetConfirmRequestDTO;
+import com.github.jredmine.dto.request.user.PasswordResetRequestDTO;
 import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
@@ -17,6 +19,7 @@ import com.github.jredmine.dto.response.user.UserLoginResponseDTO;
 import com.github.jredmine.dto.response.user.UserPreferenceResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.entity.EmailAddress;
+import com.github.jredmine.entity.Token;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.entity.UserPreference;
 import com.github.jredmine.dto.converter.UserConverter;
@@ -24,6 +27,7 @@ import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.enums.UserStatus;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.user.EmailAddressMapper;
+import com.github.jredmine.mapper.user.TokenMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.mapper.user.UserPreferenceMapper;
 import com.github.jredmine.util.JwtUtils;
@@ -43,8 +47,10 @@ public class UserService {
     private final UserMapper userMapper;
     private final EmailAddressMapper emailAddressMapper;
     private final UserPreferenceMapper userPreferenceMapper;
+    private final TokenMapper tokenMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
+    private final EmailService emailService;
 
     // 邮箱格式验证正则表达式
     private static final Pattern EMAIL_PATTERN = Pattern.compile(
@@ -941,6 +947,154 @@ public class UserService {
             response.setOthers(preference.getOthers());
 
             return response;
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 请求密码重置
+     * 生成重置Token并发送邮件
+     * 
+     * @param requestDTO 密码重置请求
+     */
+    public void requestPasswordReset(PasswordResetRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "request_password_reset");
+
+        try {
+            log.info("开始处理密码重置请求，邮箱: {}", requestDTO.getEmail());
+
+            // 1. 根据邮箱查找用户
+            LambdaQueryWrapper<EmailAddress> emailQueryWrapper = new LambdaQueryWrapper<>();
+            emailQueryWrapper.eq(EmailAddress::getAddress, requestDTO.getEmail());
+            emailQueryWrapper.eq(EmailAddress::getIsDefault, true);
+            EmailAddress emailAddress = emailAddressMapper.selectOne(emailQueryWrapper);
+
+            if (emailAddress == null) {
+                // 为了安全，即使邮箱不存在也返回成功（防止邮箱枚举攻击）
+                log.warn("密码重置请求：邮箱不存在，邮箱: {}", requestDTO.getEmail());
+                return;
+            }
+
+            Long userId = emailAddress.getUserId();
+
+            // 2. 验证用户是否存在且未删除
+            LambdaQueryWrapper<User> userQueryWrapper = new LambdaQueryWrapper<>();
+            userQueryWrapper.eq(User::getId, userId);
+            userQueryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(userQueryWrapper);
+
+            if (user == null) {
+                log.warn("密码重置请求：用户不存在或已删除，用户ID: {}", userId);
+                return;
+            }
+
+            // 3. 删除该用户之前的密码重置Token（防止重复使用）
+            LambdaQueryWrapper<Token> tokenQueryWrapper = new LambdaQueryWrapper<>();
+            tokenQueryWrapper.eq(Token::getUserId, userId);
+            tokenQueryWrapper.eq(Token::getAction, "password_reset");
+            tokenMapper.delete(tokenQueryWrapper);
+
+            // 4. 生成新的重置Token（使用UUID）
+            String resetToken = java.util.UUID.randomUUID().toString().replace("-", "");
+
+            // 5. 保存Token到数据库（有效期1小时）
+            Token token = new Token();
+            token.setUserId(userId);
+            token.setAction("password_reset");
+            token.setValue(resetToken);
+            token.setCreatedOn(new Date());
+            token.setUpdatedOn(new Date());
+            tokenMapper.insert(token);
+
+            // 6. 发送重置邮件
+            String username = user.getFirstname() + " " + user.getLastname();
+            emailService.sendPasswordResetEmail(requestDTO.getEmail(), username, resetToken);
+
+            log.info("密码重置请求处理成功，用户ID: {}, 邮箱: {}", userId, requestDTO.getEmail());
+        } catch (Exception e) {
+            log.error("密码重置请求处理失败，邮箱: {}", requestDTO.getEmail(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "密码重置请求处理失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 确认密码重置
+     * 验证Token并重置密码
+     * 
+     * @param requestDTO 密码重置确认请求
+     */
+    public void confirmPasswordReset(PasswordResetConfirmRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "confirm_password_reset");
+
+        try {
+            log.info("开始处理密码重置确认，Token: {}", requestDTO.getToken());
+
+            // 1. 验证新密码和确认密码是否一致
+            if (!requestDTO.getNewPassword().equals(requestDTO.getConfirmPassword())) {
+                log.warn("密码重置确认失败：新密码和确认密码不一致");
+                throw new BusinessException(ResultCode.PARAM_INVALID, "新密码和确认密码不一致");
+            }
+
+            // 2. 查找Token
+            LambdaQueryWrapper<Token> tokenQueryWrapper = new LambdaQueryWrapper<>();
+            tokenQueryWrapper.eq(Token::getValue, requestDTO.getToken());
+            tokenQueryWrapper.eq(Token::getAction, "password_reset");
+            Token token = tokenMapper.selectOne(tokenQueryWrapper);
+
+            if (token == null) {
+                log.warn("密码重置确认失败：Token不存在或已失效，Token: {}", requestDTO.getToken());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "重置Token无效或已过期");
+            }
+
+            // 3. 验证Token是否过期（1小时有效期）
+            long tokenAge = System.currentTimeMillis() - token.getCreatedOn().getTime();
+            long oneHour = 60 * 60 * 1000; // 1小时（毫秒）
+
+            if (tokenAge > oneHour) {
+                log.warn("密码重置确认失败：Token已过期，Token: {}, 创建时间: {}",
+                        requestDTO.getToken(), token.getCreatedOn());
+                // 删除过期Token
+                tokenMapper.deleteById(token.getId());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "重置Token已过期，请重新申请");
+            }
+
+            // 4. 验证用户是否存在且未删除
+            LambdaQueryWrapper<User> userQueryWrapper = new LambdaQueryWrapper<>();
+            userQueryWrapper.eq(User::getId, token.getUserId());
+            userQueryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(userQueryWrapper);
+
+            if (user == null) {
+                log.warn("密码重置确认失败：用户不存在或已删除，用户ID: {}", token.getUserId());
+                // 删除无效Token
+                tokenMapper.deleteById(token.getId());
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 5. 更新密码
+            String encodedPassword = passwordEncoder.encode(requestDTO.getNewPassword());
+            user.setHashedPassword(encodedPassword);
+            user.setPasswdChangedOn(new Date());
+            user.setMustChangePasswd(false); // 重置后不需要强制修改密码
+            user.setUpdatedOn(new Date());
+            userMapper.updateById(user);
+
+            // 6. 删除已使用的Token
+            tokenMapper.deleteById(token.getId());
+
+            log.info("密码重置确认成功，用户ID: {}", token.getUserId());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("密码重置确认处理失败，Token: {}", requestDTO.getToken(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "密码重置确认处理失败");
         } finally {
             // 清理 MDC
             MDC.clear();

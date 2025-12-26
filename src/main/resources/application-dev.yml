@@ -7,6 +7,24 @@ spring:
     username: root
     password: root
 
+  # 邮件配置
+  mail:
+    host: smtp.qq.com # SMTP服务器地址（QQ邮箱示例）
+    port: 587 # SMTP端口（587为TLS，465为SSL）
+    username: your-email@qq.com # 发件人邮箱
+    password: your-authorization-code # 邮箱授权码（不是登录密码）
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
 # MyBatis Plus 配置
 mybatis-plus:
   # 配置扫描 Mapper XML 文件路径
@@ -46,3 +64,8 @@ springdoc:
 jwt:
   secret: nJCfxFf49kz&vg3WCBspG^mTHyeYVZ3NX!8gqU0EKXQGYQza4EmQiEG#Sa&^Qlxy
   expiration: 86400000 # 24小时（毫秒）
+
+# 应用配置
+app:
+  reset-password:
+    url: http://localhost:8088/reset-password # 密码重置页面URL

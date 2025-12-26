@@ -49,6 +49,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/password/reset").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/password/reset/confirm").permitAll()
                         // Swagger相关接口允许访问
                         .requestMatchers(
                                 "/swagger-ui/**",

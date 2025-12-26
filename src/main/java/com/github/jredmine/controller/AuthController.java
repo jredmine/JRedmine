@@ -1,6 +1,8 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.user.PasswordChangeRequestDTO;
+import com.github.jredmine.dto.request.user.PasswordResetConfirmRequestDTO;
+import com.github.jredmine.dto.request.user.PasswordResetRequestDTO;
 import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
@@ -76,5 +78,22 @@ public class AuthController {
         String username = authentication.getName();
         userService.changePassword(username, passwordChangeRequestDTO);
         return ApiResponse.success("密码变更成功", null);
+    }
+
+    @Operation(summary = "请求密码重置", description = "通过邮箱请求密码重置，系统会发送重置邮件")
+    @PostMapping("/password/reset")
+    public ApiResponse<Void> requestPasswordReset(
+            @Valid @RequestBody PasswordResetRequestDTO passwordResetRequestDTO) {
+        userService.requestPasswordReset(passwordResetRequestDTO);
+        // 为了安全，无论邮箱是否存在都返回成功（防止邮箱枚举攻击）
+        return ApiResponse.success("如果该邮箱已注册，密码重置邮件已发送，请查收", null);
+    }
+
+    @Operation(summary = "确认密码重置", description = "使用重置Token确认并重置密码")
+    @PostMapping("/password/reset/confirm")
+    public ApiResponse<Void> confirmPasswordReset(
+            @Valid @RequestBody PasswordResetConfirmRequestDTO passwordResetConfirmRequestDTO) {
+        userService.confirmPasswordReset(passwordResetConfirmRequestDTO);
+        return ApiResponse.success("密码重置成功", null);
     }
 }
