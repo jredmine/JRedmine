@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
@@ -10,10 +11,13 @@ import com.github.jredmine.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -43,6 +47,14 @@ public class UserController {
             @RequestParam(required = false) String login) {
         PageResponse<UserListItemResponseDTO> response = userService.listUsers(current, size, login);
         return ApiResponse.success(response);
+    }
+
+    @Operation(summary = "创建新用户", description = "管理员创建新用户，可以设置管理员权限、用户状态等", security = @SecurityRequirement(name = "bearerAuth"))
+    @PostMapping
+    public ApiResponse<UserDetailResponseDTO> createUser(
+            @Valid @RequestBody UserCreateRequestDTO userCreateRequestDTO) {
+        UserDetailResponseDTO response = userService.createUser(userCreateRequestDTO);
+        return ApiResponse.success("用户创建成功", response);
     }
 
     @Operation(summary = "查询用户详情", description = "根据用户ID查询用户详细信息", security = @SecurityRequirement(name = "bearerAuth"))

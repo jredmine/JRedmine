@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.user.PasswordChangeRequestDTO;
 import com.github.jredmine.dto.request.user.TokenRefreshRequestDTO;
+import com.github.jredmine.dto.request.user.UserCreateRequestDTO;
 import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -55,38 +56,20 @@ public class UserService {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "密码和确认密码不匹配");
             }
 
-            // 2. 验证邮箱格式
-            if (!EMAIL_PATTERN.matcher(requestDTO.getEmail()).matches()) {
-                log.warn("用户注册失败：邮箱格式不正确");
-                throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱格式不正确");
-            }
+            // 2. 验证并检查用户信息
+            validateAndCheckUserInfo(requestDTO.getLogin(), requestDTO.getEmail());
 
-            // 3. 检查用户名是否已存在
-            LambdaQueryWrapper<User> loginQueryWrapper = new LambdaQueryWrapper<>();
-            loginQueryWrapper.eq(User::getLogin, requestDTO.getLogin());
-            User existsUserByLogin = userMapper.selectOne(loginQueryWrapper);
-
-            if (existsUserByLogin != null) {
-                log.warn("用户注册失败：用户名已存在");
-                throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
-            }
-
-            // 4. 检查邮箱是否已存在（TODO: 需要email_addresses表支持，暂时跳过）
-            // TODO: 实现邮箱唯一性检查
-
-            // 5. 创建用户并加密密码
-            User user = new User();
-            user.setLogin(requestDTO.getLogin());
-            // 使用BCrypt加密密码
-            user.setHashedPassword(passwordEncoder.encode(requestDTO.getPassword()));
-            user.setFirstname(requestDTO.getFirstname());
-            user.setLastname(requestDTO.getLastname());
-            user.setStatus(1); // 默认启用状态
-            user.setAdmin(false); // 默认非管理员
-            user.setLanguage("zh-CN"); // 默认语言
-            user.setMailNotification("all"); // 默认邮件通知设置
-            user.setCreatedOn(new Date());
-            user.setUpdatedOn(new Date());
+            // 3. 创建用户（注册用户使用固定默认值）
+            User user = buildUser(
+                    requestDTO.getLogin(),
+                    requestDTO.getPassword(),
+                    requestDTO.getFirstname(),
+                    requestDTO.getLastname(),
+                    1, // status: 启用
+                    false, // admin: 非管理员
+                    "zh-CN", // language
+                    "all" // mailNotification
+            );
 
             userMapper.insert(user);
 
@@ -250,6 +233,106 @@ public class UserService {
             // 清理 MDC
             MDC.clear();
         }
+    }
+
+    /**
+     * 创建新用户（管理员功能）
+     * 
+     * @param requestDTO 用户创建请求
+     * @return 用户详情
+     */
+    public UserDetailResponseDTO createUser(UserCreateRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "create_user");
+        MDC.put("login", requestDTO.getLogin());
+
+        try {
+            log.info("开始创建用户流程");
+
+            // 1. 验证并检查用户信息
+            validateAndCheckUserInfo(requestDTO.getLogin(), requestDTO.getEmail());
+
+            // 2. 创建用户（管理员创建可以自定义参数）
+            User user = buildUser(
+                    requestDTO.getLogin(),
+                    requestDTO.getPassword(),
+                    requestDTO.getFirstname(),
+                    requestDTO.getLastname(),
+                    requestDTO.getStatus() != null ? requestDTO.getStatus() : 1,
+                    requestDTO.getAdmin() != null ? requestDTO.getAdmin() : false,
+                    requestDTO.getLanguage() != null ? requestDTO.getLanguage() : "zh-CN",
+                    requestDTO.getMailNotification() != null ? requestDTO.getMailNotification() : "all");
+
+            userMapper.insert(user);
+
+            // 添加用户ID到上下文
+            MDC.put("userId", String.valueOf(user.getId()));
+            log.info("用户创建成功，用户ID: {}", user.getId());
+
+            // 转换为响应 DTO
+            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 验证并检查用户信息（公共方法）
+     * 验证邮箱格式、检查用户名和邮箱是否已存在
+     * 
+     * @param login 登录名
+     * @param email 邮箱
+     */
+    private void validateAndCheckUserInfo(String login, String email) {
+        // 1. 验证邮箱格式
+        if (!EMAIL_PATTERN.matcher(email).matches()) {
+            log.warn("用户操作失败：邮箱格式不正确");
+            throw new BusinessException(ResultCode.PARAM_ERROR, "邮箱格式不正确");
+        }
+
+        // 2. 检查用户名是否已存在
+        LambdaQueryWrapper<User> loginQueryWrapper = new LambdaQueryWrapper<>();
+        loginQueryWrapper.eq(User::getLogin, login);
+        User existsUserByLogin = userMapper.selectOne(loginQueryWrapper);
+
+        if (existsUserByLogin != null) {
+            log.warn("用户操作失败：用户名已存在");
+            throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
+        }
+
+        // 3. 检查邮箱是否已存在（TODO: 需要email_addresses表支持，暂时跳过）
+        // TODO: 实现邮箱唯一性检查
+    }
+
+    /**
+     * 构建用户对象（公共方法）
+     * 
+     * @param login            登录名
+     * @param password         密码（明文）
+     * @param firstname        名字
+     * @param lastname         姓氏
+     * @param status           用户状态
+     * @param admin            是否管理员
+     * @param language         语言设置
+     * @param mailNotification 邮件通知设置
+     * @return 用户对象
+     */
+    private User buildUser(String login, String password, String firstname, String lastname,
+            Integer status, Boolean admin, String language, String mailNotification) {
+        User user = new User();
+        user.setLogin(login);
+        // 使用BCrypt加密密码
+        user.setHashedPassword(passwordEncoder.encode(password));
+        user.setFirstname(firstname);
+        user.setLastname(lastname);
+        user.setStatus(status);
+        user.setAdmin(admin);
+        user.setLanguage(language);
+        user.setMailNotification(mailNotification);
+        user.setCreatedOn(new Date());
+        user.setUpdatedOn(new Date());
+        return user;
     }
 
     /**
