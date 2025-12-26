@@ -8,6 +8,7 @@ import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
+import com.github.jredmine.dto.response.user.UserListItemResponseDTO;
 import com.github.jredmine.dto.response.user.UserLoginResponseDTO;
 import com.github.jredmine.dto.response.user.UserRegisterResponseDTO;
 import com.github.jredmine.entity.User;
@@ -178,7 +179,7 @@ public class UserService {
      * @param login   登录名（可选，用于模糊查询）
      * @return 分页响应
      */
-    public PageResponse<UserRegisterResponseDTO> listUsers(Integer current, Integer size, String login) {
+    public PageResponse<UserListItemResponseDTO> listUsers(Integer current, Integer size, String login) {
         // 使用 MDC 添加上下文信息
         MDC.put("operation", "list_users");
         MDC.put("page", String.valueOf(current));
@@ -195,7 +196,7 @@ public class UserService {
             if (login != null && !login.trim().isEmpty()) {
                 queryWrapper.like(User::getLogin, login);
             }
-            // 按创建时间倒序
+            // 按ID倒序（id是自增主键，按id排序性能最优，结果与按创建时间排序一致）
             queryWrapper.orderByDesc(User::getId);
 
             // 执行分页查询
@@ -208,7 +209,7 @@ public class UserService {
             // 转换为响应 DTO
             return PageResponse.of(
                     result.getRecords().stream()
-                            .map(UserConverter.INSTANCE::toUserRegisterResponseDTO)
+                            .map(UserConverter.INSTANCE::toUserListItemResponseDTO)
                             .toList(),
                     (int) result.getTotal(),
                     (int) result.getCurrent(),
