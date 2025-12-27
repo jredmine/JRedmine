@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.role.RoleCopyRequestDTO;
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
 import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
@@ -97,6 +98,21 @@ public class RoleController {
         securityUtils.requireAdmin();
         RoleDetailResponseDTO response = roleService.updateRole(id, roleUpdateRequestDTO);
         return ApiResponse.success("角色更新成功", response);
+    }
+
+    @Operation(
+            summary = "复制角色",
+            description = "复制现有角色创建新角色，复制角色的所有配置（权限、可见性等），仅修改角色名称。新角色为自定义角色。仅管理员可访问",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @PostMapping("/{id}/copy")
+    public ApiResponse<RoleDetailResponseDTO> copyRole(
+            @PathVariable Integer id,
+            @Valid @RequestBody RoleCopyRequestDTO roleCopyRequestDTO) {
+        // 仅管理员可复制角色
+        securityUtils.requireAdmin();
+        RoleDetailResponseDTO response = roleService.copyRole(id, roleCopyRequestDTO);
+        return ApiResponse.success("角色复制成功", response);
     }
 
     @Operation(

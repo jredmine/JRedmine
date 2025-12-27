@@ -3,6 +3,7 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.converter.RoleConverter;
+import com.github.jredmine.dto.request.role.RoleCopyRequestDTO;
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
 import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -300,6 +301,84 @@ public class RoleService {
         } catch (Exception e) {
             log.error("角色更新失败，角色ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色更新失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 复制角色
+     *
+     * @param sourceId   源角色ID
+     * @param requestDTO 复制请求（包含新角色名称）
+     * @return 新创建的角色详情
+     */
+    public RoleDetailResponseDTO copyRole(Integer sourceId, RoleCopyRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "copy_role");
+        MDC.put("sourceRoleId", String.valueOf(sourceId));
+
+        try {
+            log.info("开始复制角色，源角色ID: {}, 新角色名称: {}", sourceId, requestDTO.getName());
+
+            // 1. 查询源角色是否存在
+            Role sourceRole = roleMapper.selectById(sourceId);
+            if (sourceRole == null) {
+                log.warn("角色复制失败：源角色不存在，源角色ID: {}", sourceId);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND, "源角色不存在");
+            }
+
+            // 2. 验证新角色名称唯一性
+            LambdaQueryWrapper<Role> nameQueryWrapper = new LambdaQueryWrapper<>();
+            nameQueryWrapper.eq(Role::getName, requestDTO.getName());
+            Role existingRole = roleMapper.selectOne(nameQueryWrapper);
+            if (existingRole != null) {
+                log.warn("角色复制失败：新角色名称已存在，角色名称: {}", requestDTO.getName());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "角色名称已存在");
+            }
+
+            // 3. 获取最大 position 值，新角色排在最后
+            LambdaQueryWrapper<Role> positionQueryWrapper = new LambdaQueryWrapper<>();
+            positionQueryWrapper.select(Role::getPosition)
+                    .orderByDesc(Role::getPosition)
+                    .last("LIMIT 1");
+            Role maxPositionRole = roleMapper.selectOne(positionQueryWrapper);
+            int nextPosition = (maxPositionRole != null && maxPositionRole.getPosition() != null)
+                    ? maxPositionRole.getPosition() + 1 : 1;
+
+            // 4. 创建新角色实体，复制源角色的所有配置
+            Role newRole = new Role();
+            newRole.setName(requestDTO.getName()); // 使用新名称
+            newRole.setPosition(nextPosition); // 新角色排在最后
+            newRole.setAssignable(sourceRole.getAssignable() != null ? sourceRole.getAssignable() : true);
+            newRole.setBuiltin(0); // 新角色为自定义角色
+            newRole.setPermissions(sourceRole.getPermissions()); // 复制权限配置
+            newRole.setIssuesVisibility(sourceRole.getIssuesVisibility() != null
+                    ? sourceRole.getIssuesVisibility() : "default");
+            newRole.setUsersVisibility(sourceRole.getUsersVisibility() != null
+                    ? sourceRole.getUsersVisibility() : "members_of_visible_projects");
+            newRole.setTimeEntriesVisibility(sourceRole.getTimeEntriesVisibility() != null
+                    ? sourceRole.getTimeEntriesVisibility() : "all");
+            newRole.setAllRolesManaged(sourceRole.getAllRolesManaged() != null
+                    ? sourceRole.getAllRolesManaged() : true);
+            newRole.setSettings(sourceRole.getSettings()); // 复制设置
+            newRole.setDefaultTimeEntryActivityId(sourceRole.getDefaultTimeEntryActivityId()); // 复制默认工时活动ID
+
+            // 5. 保存到数据库
+            roleMapper.insert(newRole);
+
+            log.info("角色复制成功，源角色ID: {}, 新角色ID: {}, 新角色名称: {}", 
+                    sourceId, newRole.getId(), newRole.getName());
+
+            // 6. 转换为响应 DTO
+            return RoleConverter.INSTANCE.toRoleDetailResponseDTO(newRole);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("角色复制失败，源角色ID: {}, 新角色名称: {}", sourceId, requestDTO.getName(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色复制失败");
         } finally {
             // 清理 MDC
             MDC.clear();
