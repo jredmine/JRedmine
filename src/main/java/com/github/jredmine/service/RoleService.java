@@ -451,6 +451,251 @@ public class RoleService {
     }
 
     /**
+     * 获取角色可管理的角色列表
+     *
+     * @param roleId 角色ID
+     * @return 可管理的角色列表
+     */
+    public List<RoleListItemResponseDTO> getManagedRoles(Integer roleId) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "get_managed_roles");
+        MDC.put("roleId", String.valueOf(roleId));
+
+        try {
+            log.debug("开始获取角色可管理的角色列表，角色ID: {}", roleId);
+
+            // 1. 查询角色是否存在
+            Role role = roleMapper.selectById(roleId);
+            if (role == null) {
+                log.warn("角色不存在，角色ID: {}", roleId);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            // 2. 如果角色管理所有角色（all_roles_managed = true），返回所有角色
+            if (role.getAllRolesManaged() != null && role.getAllRolesManaged()) {
+                log.debug("角色管理所有角色，返回所有角色列表，角色ID: {}", roleId);
+                List<Role> allRoles = roleMapper.selectList(null);
+                return allRoles.stream()
+                        .map(RoleConverter.INSTANCE::toRoleListItemResponseDTO)
+                        .toList();
+            }
+
+            // 3. 查询 roles_managed_roles 表，获取可管理的角色ID列表
+            LambdaQueryWrapper<RolesManagedRole> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(RolesManagedRole::getRoleId, roleId);
+            List<RolesManagedRole> managedRoles = rolesManagedRoleMapper.selectList(queryWrapper);
+
+            if (managedRoles.isEmpty()) {
+                log.info("角色没有可管理的角色，角色ID: {}", roleId);
+                return new ArrayList<>();
+            }
+
+            // 4. 根据 managed_role_id 查询角色详情
+            List<Integer> managedRoleIds = managedRoles.stream()
+                    .map(RolesManagedRole::getManagedRoleId)
+                    .toList();
+
+            List<Role> roles = roleMapper.selectBatchIds(managedRoleIds);
+
+            log.info("获取角色可管理的角色列表成功，角色ID: {}, 可管理角色数量: {}", roleId, roles.size());
+
+            // 5. 转换为响应 DTO
+            return roles.stream()
+                    .map(RoleConverter.INSTANCE::toRoleListItemResponseDTO)
+                    .toList();
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("获取角色可管理的角色列表失败，角色ID: {}", roleId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "获取可管理的角色列表失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 批量更新角色管理关系
+     *
+     * @param roleId   角色ID
+     * @param managedRoleIds 可管理的角色ID列表
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void updateManagedRoles(Integer roleId, List<Integer> managedRoleIds) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "update_managed_roles");
+        MDC.put("roleId", String.valueOf(roleId));
+
+        try {
+            log.info("开始批量更新角色管理关系，角色ID: {}, 可管理角色数量: {}", roleId, managedRoleIds.size());
+
+            // 1. 查询角色是否存在
+            Role role = roleMapper.selectById(roleId);
+            if (role == null) {
+                log.warn("角色不存在，角色ID: {}", roleId);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            // 2. 验证要管理的角色是否存在
+            if (!managedRoleIds.isEmpty()) {
+                List<Role> managedRoles = roleMapper.selectBatchIds(managedRoleIds);
+                if (managedRoles.size() != managedRoleIds.size()) {
+                    log.warn("部分角色不存在，角色ID: {}", roleId);
+                    throw new BusinessException(ResultCode.ROLE_NOT_FOUND, "部分角色不存在");
+                }
+
+                // 3. 检查是否包含自己（不能管理自己）
+                if (managedRoleIds.contains(roleId)) {
+                    log.warn("角色不能管理自己，角色ID: {}", roleId);
+                    throw new BusinessException(ResultCode.PARAM_INVALID, "角色不能管理自己");
+                }
+            }
+
+            // 4. 删除旧的管理关系
+            LambdaQueryWrapper<RolesManagedRole> deleteWrapper = new LambdaQueryWrapper<>();
+            deleteWrapper.eq(RolesManagedRole::getRoleId, roleId);
+            rolesManagedRoleMapper.delete(deleteWrapper);
+
+            // 5. 添加新的管理关系
+            if (!managedRoleIds.isEmpty()) {
+                for (Integer managedRoleId : managedRoleIds) {
+                    RolesManagedRole managedRole = new RolesManagedRole();
+                    managedRole.setRoleId(roleId);
+                    managedRole.setManagedRoleId(managedRoleId);
+                    rolesManagedRoleMapper.insert(managedRole);
+                }
+            }
+
+            // 6. 更新角色的 all_roles_managed 字段为 false（如果设置为管理所有角色，则不需要记录）
+            // 注意：这里不自动更新 all_roles_managed，由用户通过更新角色接口设置
+
+            log.info("批量更新角色管理关系成功，角色ID: {}, 可管理角色数量: {}", roleId, managedRoleIds.size());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("批量更新角色管理关系失败，角色ID: {}", roleId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "批量更新角色管理关系失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 添加角色管理关系
+     *
+     * @param roleId        角色ID
+     * @param managedRoleId 被管理的角色ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void addManagedRole(Integer roleId, Integer managedRoleId) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "add_managed_role");
+        MDC.put("roleId", String.valueOf(roleId));
+        MDC.put("managedRoleId", String.valueOf(managedRoleId));
+
+        try {
+            log.info("开始添加角色管理关系，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId);
+
+            // 1. 查询角色是否存在
+            Role role = roleMapper.selectById(roleId);
+            if (role == null) {
+                log.warn("角色不存在，角色ID: {}", roleId);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            // 2. 查询被管理的角色是否存在
+            Role managedRole = roleMapper.selectById(managedRoleId);
+            if (managedRole == null) {
+                log.warn("被管理的角色不存在，被管理角色ID: {}", managedRoleId);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND, "被管理的角色不存在");
+            }
+
+            // 3. 检查是否是自己（不能管理自己）
+            if (roleId.equals(managedRoleId)) {
+                log.warn("角色不能管理自己，角色ID: {}", roleId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "角色不能管理自己");
+            }
+
+            // 4. 检查是否已存在
+            LambdaQueryWrapper<RolesManagedRole> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(RolesManagedRole::getRoleId, roleId)
+                    .eq(RolesManagedRole::getManagedRoleId, managedRoleId);
+            RolesManagedRole existing = rolesManagedRoleMapper.selectOne(queryWrapper);
+            if (existing != null) {
+                log.warn("角色管理关系已存在，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "角色管理关系已存在");
+            }
+
+            // 5. 添加管理关系
+            RolesManagedRole managedRoleRelation = new RolesManagedRole();
+            managedRoleRelation.setRoleId(roleId);
+            managedRoleRelation.setManagedRoleId(managedRoleId);
+            rolesManagedRoleMapper.insert(managedRoleRelation);
+
+            log.info("添加角色管理关系成功，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("添加角色管理关系失败，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "添加角色管理关系失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 删除角色管理关系
+     *
+     * @param roleId        角色ID
+     * @param managedRoleId 被管理的角色ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void removeManagedRole(Integer roleId, Integer managedRoleId) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "remove_managed_role");
+        MDC.put("roleId", String.valueOf(roleId));
+        MDC.put("managedRoleId", String.valueOf(managedRoleId));
+
+        try {
+            log.info("开始删除角色管理关系，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId);
+
+            // 1. 查询角色是否存在
+            Role role = roleMapper.selectById(roleId);
+            if (role == null) {
+                log.warn("角色不存在，角色ID: {}", roleId);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            // 2. 删除管理关系
+            LambdaQueryWrapper<RolesManagedRole> deleteWrapper = new LambdaQueryWrapper<>();
+            deleteWrapper.eq(RolesManagedRole::getRoleId, roleId)
+                    .eq(RolesManagedRole::getManagedRoleId, managedRoleId);
+            int deleted = rolesManagedRoleMapper.delete(deleteWrapper);
+
+            if (deleted == 0) {
+                log.warn("角色管理关系不存在，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "角色管理关系不存在");
+            }
+
+            log.info("删除角色管理关系成功，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("删除角色管理关系失败，角色ID: {}, 被管理角色ID: {}", roleId, managedRoleId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "删除角色管理关系失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
      * 验证权限列表有效性
      *
      * @param permissions 权限列表

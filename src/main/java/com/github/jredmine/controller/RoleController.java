@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.role.RoleCopyRequestDTO;
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
+import com.github.jredmine.dto.request.role.RoleManagedRolesRequestDTO;
 import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
@@ -22,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 角色管理控制器
@@ -126,6 +129,63 @@ public class RoleController {
         securityUtils.requireAdmin();
         roleService.deleteRole(id);
         return ApiResponse.success("角色删除成功", null);
+    }
+
+    @Operation(
+            summary = "获取角色可管理的角色列表",
+            description = "获取指定角色可以管理的其他角色列表。如果角色设置了 all_roles_managed=true，则返回所有角色。需要认证",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @GetMapping("/{id}/managed-roles")
+    public ApiResponse<List<RoleListItemResponseDTO>> getManagedRoles(@PathVariable Integer id) {
+        // 需要认证，但不需要管理员权限（普通用户也可以查看）
+        List<RoleListItemResponseDTO> response = roleService.getManagedRoles(id);
+        return ApiResponse.success(response);
+    }
+
+    @Operation(
+            summary = "批量更新角色管理关系",
+            description = "批量设置角色可以管理的其他角色列表。如果角色设置了 all_roles_managed=true，此设置将被忽略。仅管理员可访问",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @PutMapping("/{id}/managed-roles")
+    public ApiResponse<Void> updateManagedRoles(
+            @PathVariable Integer id,
+            @Valid @RequestBody RoleManagedRolesRequestDTO requestDTO) {
+        // 仅管理员可更新角色管理关系
+        securityUtils.requireAdmin();
+        roleService.updateManagedRoles(id, requestDTO.getManagedRoleIds());
+        return ApiResponse.success("角色管理关系更新成功", null);
+    }
+
+    @Operation(
+            summary = "添加角色管理关系",
+            description = "为角色添加一个可管理的角色。仅管理员可访问",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @PostMapping("/{id}/managed-roles/{managedRoleId}")
+    public ApiResponse<Void> addManagedRole(
+            @PathVariable Integer id,
+            @PathVariable Integer managedRoleId) {
+        // 仅管理员可添加角色管理关系
+        securityUtils.requireAdmin();
+        roleService.addManagedRole(id, managedRoleId);
+        return ApiResponse.success("角色管理关系添加成功", null);
+    }
+
+    @Operation(
+            summary = "删除角色管理关系",
+            description = "移除角色的一个管理关系。仅管理员可访问",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @DeleteMapping("/{id}/managed-roles/{managedRoleId}")
+    public ApiResponse<Void> removeManagedRole(
+            @PathVariable Integer id,
+            @PathVariable Integer managedRoleId) {
+        // 仅管理员可删除角色管理关系
+        securityUtils.requireAdmin();
+        roleService.removeManagedRole(id, managedRoleId);
+        return ApiResponse.success("角色管理关系删除成功", null);
     }
 }
 
