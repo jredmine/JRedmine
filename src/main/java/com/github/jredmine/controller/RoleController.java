@@ -58,6 +58,18 @@ public class RoleController {
     }
 
     @Operation(
+            summary = "获取角色详情",
+            description = "根据角色ID查询角色详细信息，包括权限列表。需要认证",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @GetMapping("/{id}")
+    public ApiResponse<RoleDetailResponseDTO> getRoleById(@PathVariable Integer id) {
+        // 需要认证，但不需要管理员权限（普通用户也可以查看角色详情）
+        RoleDetailResponseDTO response = roleService.getRoleById(id);
+        return ApiResponse.success(response);
+    }
+
+    @Operation(
             summary = "创建角色",
             description = "创建新角色（仅支持自定义角色，不能创建内置角色）。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")

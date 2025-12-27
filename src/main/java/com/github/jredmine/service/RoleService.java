@@ -92,6 +92,43 @@ public class RoleService {
     }
 
     /**
+     * 根据ID查询角色详情
+     *
+     * @param id 角色ID
+     * @return 角色详情
+     */
+    public RoleDetailResponseDTO getRoleById(Integer id) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "get_role_by_id");
+        MDC.put("roleId", String.valueOf(id));
+
+        try {
+            log.debug("开始查询角色详情，角色ID: {}", id);
+
+            // 查询角色
+            Role role = roleMapper.selectById(id);
+
+            if (role == null) {
+                log.warn("角色不存在，角色ID: {}", id);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            log.info("角色详情查询成功，角色ID: {}", id);
+
+            // 转换为响应 DTO
+            return RoleConverter.INSTANCE.toRoleDetailResponseDTO(role);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("角色详情查询失败，角色ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色详情查询失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
      * 创建角色
      *
      * @param requestDTO 角色创建请求
