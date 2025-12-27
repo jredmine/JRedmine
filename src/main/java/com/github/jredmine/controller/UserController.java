@@ -12,6 +12,7 @@ import com.github.jredmine.dto.response.user.UserPreferenceResponseDTO;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.service.UserService;
+import com.github.jredmine.util.SecurityUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -40,57 +41,71 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
     private final UserService userService;
+    private final SecurityUtils securityUtils;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, SecurityUtils securityUtils) {
         this.userService = userService;
+        this.securityUtils = securityUtils;
     }
 
-    @Operation(summary = "分页查询用户列表", description = "分页查询用户列表，支持按登录名模糊查询", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "分页查询用户列表", description = "分页查询用户列表，支持按登录名模糊查询。仅管理员可访问", security = @SecurityRequirement(name = "bearerAuth"))
     @GetMapping
     public ApiResponse<PageResponse<UserListItemResponseDTO>> listUsers(
             @RequestParam(defaultValue = "1") Integer current,
             @RequestParam(defaultValue = "10") Integer size,
             @RequestParam(required = false) String login) {
+        // 仅管理员可查询用户列表
+        securityUtils.requireAdmin();
         PageResponse<UserListItemResponseDTO> response = userService.listUsers(current, size, login);
         return ApiResponse.success(response);
     }
 
-    @Operation(summary = "创建新用户", description = "管理员创建新用户，可以设置管理员权限、用户状态等", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "创建新用户", description = "管理员创建新用户，可以设置管理员权限、用户状态等。仅管理员可访问", security = @SecurityRequirement(name = "bearerAuth"))
     @PostMapping
     public ApiResponse<UserDetailResponseDTO> createUser(
             @Valid @RequestBody UserCreateRequestDTO userCreateRequestDTO) {
+        // 仅管理员可创建用户
+        securityUtils.requireAdmin();
         UserDetailResponseDTO response = userService.createUser(userCreateRequestDTO);
         return ApiResponse.success("用户创建成功", response);
     }
 
-    @Operation(summary = "查询用户详情", description = "根据用户ID查询用户详细信息", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "查询用户详情", description = "根据用户ID查询用户详细信息。用户可以查询自己的信息，管理员可以查询所有用户", security = @SecurityRequirement(name = "bearerAuth"))
     @GetMapping("/{id}")
     public ApiResponse<UserDetailResponseDTO> getUserById(@PathVariable Long id) {
+        // 用户可以查询自己的信息，管理员可以查询所有用户
+        securityUtils.requireAdminOrSelf(id);
         UserDetailResponseDTO response = userService.getUserById(id);
         return ApiResponse.success(response);
     }
 
-    @Operation(summary = "更新用户信息", description = "更新用户信息，可以更新名字、姓氏、管理员权限、用户状态等", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "更新用户信息", description = "更新用户信息。用户可以更新自己的部分信息（如姓名、邮箱），管理员可以更新所有信息（包括管理员权限、用户状态等）。仅管理员可访问", security = @SecurityRequirement(name = "bearerAuth"))
     @PutMapping("/{id}")
     public ApiResponse<UserDetailResponseDTO> updateUser(
             @PathVariable Long id,
             @Valid @RequestBody UserUpdateRequestDTO userUpdateRequestDTO) {
+        // 仅管理员可更新用户信息（包括管理员权限、状态等敏感字段）
+        securityUtils.requireAdmin();
         UserDetailResponseDTO response = userService.updateUser(id, userUpdateRequestDTO);
         return ApiResponse.success("用户信息更新成功", response);
     }
 
-    @Operation(summary = "更新用户状态", description = "启用/禁用/锁定用户账号，状态值：1=启用, 2=锁定, 3=待激活", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "更新用户状态", description = "启用/禁用/锁定用户账号，状态值：1=启用, 2=锁定, 3=待激活。仅管理员可访问", security = @SecurityRequirement(name = "bearerAuth"))
     @PutMapping("/{id}/status")
     public ApiResponse<UserDetailResponseDTO> updateUserStatus(
             @PathVariable Long id,
             @Valid @RequestBody UserStatusUpdateRequestDTO userStatusUpdateRequestDTO) {
+        // 仅管理员可更新用户状态
+        securityUtils.requireAdmin();
         UserDetailResponseDTO response = userService.updateUserStatus(id, userStatusUpdateRequestDTO);
         return ApiResponse.success("用户状态更新成功", response);
     }
 
-    @Operation(summary = "删除用户", description = "软删除用户，设置删除时间，用户数据不会被物理删除", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "删除用户", description = "软删除用户，设置删除时间，用户数据不会被物理删除。仅管理员可访问", security = @SecurityRequirement(name = "bearerAuth"))
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deleteUser(@PathVariable Long id) {
+        // 仅管理员可删除用户
+        securityUtils.requireAdmin();
         userService.deleteUser(id);
         return ApiResponse.success("用户删除成功", null);
     }
@@ -110,18 +125,22 @@ public class UserController {
         return ApiResponse.success(response);
     }
 
-    @Operation(summary = "获取用户偏好设置", description = "获取指定用户的偏好设置（时区、隐藏邮箱等）", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "获取用户偏好设置", description = "获取指定用户的偏好设置（时区、隐藏邮箱等）。用户可以查询自己的偏好设置，管理员可以查询所有用户", security = @SecurityRequirement(name = "bearerAuth"))
     @GetMapping("/{id}/preferences")
     public ApiResponse<UserPreferenceResponseDTO> getUserPreference(@PathVariable Long id) {
+        // 用户可以查询自己的偏好设置，管理员可以查询所有用户
+        securityUtils.requireAdminOrSelf(id);
         UserPreferenceResponseDTO response = userService.getUserPreference(id);
         return ApiResponse.success(response);
     }
 
-    @Operation(summary = "更新用户偏好设置", description = "更新指定用户的偏好设置（时区、隐藏邮箱等）", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "更新用户偏好设置", description = "更新指定用户的偏好设置（时区、隐藏邮箱等）。用户可以更新自己的偏好设置，管理员可以更新所有用户", security = @SecurityRequirement(name = "bearerAuth"))
     @PutMapping("/{id}/preferences")
     public ApiResponse<UserPreferenceResponseDTO> updateUserPreference(
             @PathVariable Long id,
             @Valid @RequestBody UserPreferenceUpdateRequestDTO userPreferenceUpdateRequestDTO) {
+        // 用户可以更新自己的偏好设置，管理员可以更新所有用户
+        securityUtils.requireAdminOrSelf(id);
         UserPreferenceResponseDTO response = userService.updateUserPreference(id, userPreferenceUpdateRequestDTO);
         return ApiResponse.success("用户偏好设置更新成功", response);
     }
