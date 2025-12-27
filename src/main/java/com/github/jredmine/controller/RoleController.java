@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -96,6 +97,19 @@ public class RoleController {
         securityUtils.requireAdmin();
         RoleDetailResponseDTO response = roleService.updateRole(id, roleUpdateRequestDTO);
         return ApiResponse.success("角色更新成功", response);
+    }
+
+    @Operation(
+            summary = "删除角色",
+            description = "删除角色（仅支持自定义角色）。如果角色正在被项目成员使用，将返回错误。仅管理员可访问",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteRole(@PathVariable Integer id) {
+        // 仅管理员可删除角色
+        securityUtils.requireAdmin();
+        roleService.deleteRole(id);
+        return ApiResponse.success("角色删除成功", null);
     }
 }
 

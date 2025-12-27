@@ -12,12 +12,17 @@ import com.github.jredmine.entity.Role;
 import com.github.jredmine.enums.Permission;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
+import com.github.jredmine.entity.MemberRole;
+import com.github.jredmine.entity.RolesManagedRole;
+import com.github.jredmine.mapper.user.MemberRoleMapper;
 import com.github.jredmine.mapper.user.RoleMapper;
+import com.github.jredmine.mapper.user.RolesManagedRoleMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +38,8 @@ import java.util.List;
 public class RoleService {
 
     private final RoleMapper roleMapper;
+    private final MemberRoleMapper memberRoleMapper;
+    private final RolesManagedRoleMapper rolesManagedRoleMapper;
     private final ObjectMapper objectMapper;
 
     /**
@@ -293,6 +300,71 @@ public class RoleService {
         } catch (Exception e) {
             log.error("角色更新失败，角色ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色更新失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 删除角色
+     *
+     * @param id 角色ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteRole(Integer id) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "delete_role");
+        MDC.put("roleId", String.valueOf(id));
+
+        try {
+            log.info("开始删除角色，角色ID: {}", id);
+
+            // 1. 查询角色是否存在
+            Role role = roleMapper.selectById(id);
+            if (role == null) {
+                log.warn("角色删除失败：角色不存在，角色ID: {}", id);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            // 2. 检查是否是内置角色
+            boolean isBuiltin = role.getBuiltin() != null && role.getBuiltin() > 0;
+            if (isBuiltin) {
+                log.warn("角色删除失败：内置角色不能删除，角色ID: {}, builtin: {}", id, role.getBuiltin());
+                throw new BusinessException(ResultCode.ROLE_CANNOT_DELETE, "内置角色不能删除");
+            }
+
+            // 3. 检查是否有项目成员使用此角色（member_roles表）
+            LambdaQueryWrapper<MemberRole> memberRoleQueryWrapper = new LambdaQueryWrapper<>();
+            memberRoleQueryWrapper.eq(MemberRole::getRoleId, id);
+            Long memberRoleCount = memberRoleMapper.selectCount(memberRoleQueryWrapper);
+            if (memberRoleCount > 0) {
+                log.warn("角色删除失败：角色正在被项目成员使用，角色ID: {}, 使用数量: {}", id, memberRoleCount);
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "角色正在被 " + memberRoleCount + " 个项目成员使用，请先移除关联后再删除");
+            }
+
+            // 4. 删除角色管理关系（roles_managed_roles表）
+            // 删除作为 role_id 的记录
+            LambdaQueryWrapper<RolesManagedRole> roleQueryWrapper = new LambdaQueryWrapper<>();
+            roleQueryWrapper.eq(RolesManagedRole::getRoleId, id);
+            rolesManagedRoleMapper.delete(roleQueryWrapper);
+
+            // 删除作为 managed_role_id 的记录
+            LambdaQueryWrapper<RolesManagedRole> managedRoleQueryWrapper = new LambdaQueryWrapper<>();
+            managedRoleQueryWrapper.eq(RolesManagedRole::getManagedRoleId, id);
+            rolesManagedRoleMapper.delete(managedRoleQueryWrapper);
+
+            // 5. 删除角色本身
+            roleMapper.deleteById(id);
+
+            log.info("角色删除成功，角色ID: {}, 角色名称: {}", id, role.getName());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("角色删除失败，角色ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色删除失败");
         } finally {
             // 清理 MDC
             MDC.clear();
