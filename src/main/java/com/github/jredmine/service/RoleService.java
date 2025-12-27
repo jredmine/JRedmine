@@ -3,6 +3,7 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.converter.RoleConverter;
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
+import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
 import com.github.jredmine.dto.response.role.RoleDetailResponseDTO;
 import com.github.jredmine.entity.Role;
 import com.github.jredmine.enums.Permission;
@@ -98,6 +99,104 @@ public class RoleService {
         } catch (Exception e) {
             log.error("角色创建失败，角色名称: {}", requestDTO.getName(), e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色创建失败");
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 更新角色
+     *
+     * @param id         角色ID
+     * @param requestDTO 角色更新请求
+     * @return 更新后的角色详情
+     */
+    public RoleDetailResponseDTO updateRole(Integer id, RoleUpdateRequestDTO requestDTO) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "update_role");
+        MDC.put("roleId", String.valueOf(id));
+
+        try {
+            log.info("开始更新角色，角色ID: {}", id);
+
+            // 1. 查询角色是否存在
+            Role role = roleMapper.selectById(id);
+            if (role == null) {
+                log.warn("角色更新失败：角色不存在，角色ID: {}", id);
+                throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+            }
+
+            // 2. 检查是否是内置角色
+            boolean isBuiltin = role.getBuiltin() != null && role.getBuiltin() > 0;
+
+            // 3. 内置角色只能更新部分字段（permissions、可见性等），不能修改 name、builtin
+            if (isBuiltin) {
+                log.debug("更新内置角色，角色ID: {}, builtin: {}", id, role.getBuiltin());
+                // 内置角色不能修改名称
+                if (requestDTO.getName() != null && !requestDTO.getName().equals(role.getName())) {
+                    log.warn("角色更新失败：内置角色不能修改名称，角色ID: {}", id);
+                    throw new BusinessException(ResultCode.ROLE_CANNOT_MODIFY, "内置角色不能修改名称");
+                }
+            } else {
+                // 自定义角色可以修改名称，但需要验证唯一性
+                if (requestDTO.getName() != null && !requestDTO.getName().equals(role.getName())) {
+                    LambdaQueryWrapper<Role> nameQueryWrapper = new LambdaQueryWrapper<>();
+                    nameQueryWrapper.eq(Role::getName, requestDTO.getName())
+                            .ne(Role::getId, id);
+                    Role existingRole = roleMapper.selectOne(nameQueryWrapper);
+                    if (existingRole != null) {
+                        log.warn("角色更新失败：角色名称已存在，角色名称: {}", requestDTO.getName());
+                        throw new BusinessException(ResultCode.PARAM_INVALID, "角色名称已存在");
+                    }
+                    role.setName(requestDTO.getName());
+                }
+            }
+
+            // 4. 验证权限列表有效性（如果提供了权限列表）
+            if (requestDTO.getPermissions() != null) {
+                validatePermissions(requestDTO.getPermissions());
+                // 将权限列表转换为JSON字符串
+                String permissionsJson = objectMapper.writeValueAsString(requestDTO.getPermissions());
+                role.setPermissions(permissionsJson);
+            }
+
+            // 5. 更新其他字段（只更新提供的字段）
+            if (requestDTO.getPosition() != null) {
+                role.setPosition(requestDTO.getPosition());
+            }
+            if (requestDTO.getAssignable() != null) {
+                role.setAssignable(requestDTO.getAssignable());
+            }
+            if (requestDTO.getIssuesVisibility() != null) {
+                role.setIssuesVisibility(requestDTO.getIssuesVisibility());
+            }
+            if (requestDTO.getUsersVisibility() != null) {
+                role.setUsersVisibility(requestDTO.getUsersVisibility());
+            }
+            if (requestDTO.getTimeEntriesVisibility() != null) {
+                role.setTimeEntriesVisibility(requestDTO.getTimeEntriesVisibility());
+            }
+            if (requestDTO.getAllRolesManaged() != null) {
+                role.setAllRolesManaged(requestDTO.getAllRolesManaged());
+            }
+            if (requestDTO.getSettings() != null) {
+                role.setSettings(requestDTO.getSettings());
+            }
+
+            // 6. 更新到数据库
+            roleMapper.updateById(role);
+
+            log.info("角色更新成功，角色ID: {}, 角色名称: {}", role.getId(), role.getName());
+
+            // 7. 转换为响应 DTO
+            return RoleConverter.INSTANCE.toRoleDetailResponseDTO(role);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("角色更新失败，角色ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "角色更新失败");
         } finally {
             // 清理 MDC
             MDC.clear();

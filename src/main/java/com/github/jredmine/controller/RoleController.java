@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
+import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.role.RoleDetailResponseDTO;
 import com.github.jredmine.service.RoleService;
@@ -9,7 +10,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -45,6 +48,21 @@ public class RoleController {
         securityUtils.requireAdmin();
         RoleDetailResponseDTO response = roleService.createRole(roleCreateRequestDTO);
         return ApiResponse.success("角色创建成功", response);
+    }
+
+    @Operation(
+            summary = "更新角色",
+            description = "更新角色信息。内置角色只能更新部分字段（如permissions），不能修改name、builtin等。仅管理员可访问",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @PutMapping("/{id}")
+    public ApiResponse<RoleDetailResponseDTO> updateRole(
+            @PathVariable Integer id,
+            @Valid @RequestBody RoleUpdateRequestDTO roleUpdateRequestDTO) {
+        // 仅管理员可更新角色
+        securityUtils.requireAdmin();
+        RoleDetailResponseDTO response = roleService.updateRole(id, roleUpdateRequestDTO);
+        return ApiResponse.success("角色更新成功", response);
     }
 }
 
