@@ -1,6 +1,7 @@
 package com.github.jredmine.dto.converter;
 
 import com.github.jredmine.dto.response.role.RoleDetailResponseDTO;
+import com.github.jredmine.dto.response.role.RoleListItemResponseDTO;
 import com.github.jredmine.entity.Role;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +23,23 @@ public interface RoleConverter {
     
     // 使用静态 ObjectMapper 实例，避免每次创建
     ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    /**
+     * 将 Role 实体转换为 RoleListItemResponseDTO
+     */
+    default RoleListItemResponseDTO toRoleListItemResponseDTO(Role role) {
+        if (role == null) {
+            return null;
+        }
+
+        RoleListItemResponseDTO dto = new RoleListItemResponseDTO();
+        dto.setId(role.getId());
+        dto.setName(role.getName());
+        dto.setPosition(role.getPosition());
+        dto.setAssignable(role.getAssignable());
+        dto.setBuiltin(role.getBuiltin());
+        return dto;
+    }
 
     /**
      * 将 Role 实体转换为 RoleDetailResponseDTO

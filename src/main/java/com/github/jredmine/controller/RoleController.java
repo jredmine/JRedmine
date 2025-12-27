@@ -3,18 +3,22 @@ package com.github.jredmine.controller;
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
 import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.role.RoleDetailResponseDTO;
+import com.github.jredmine.dto.response.role.RoleListItemResponseDTO;
 import com.github.jredmine.service.RoleService;
 import com.github.jredmine.util.SecurityUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -34,6 +38,23 @@ public class RoleController {
     public RoleController(RoleService roleService, SecurityUtils securityUtils) {
         this.roleService = roleService;
         this.securityUtils = securityUtils;
+    }
+
+    @Operation(
+            summary = "获取角色列表",
+            description = "分页查询角色列表，支持按名称、是否内置、是否可分配等条件筛选。需要认证",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @GetMapping
+    public ApiResponse<PageResponse<RoleListItemResponseDTO>> listRoles(
+            @RequestParam(defaultValue = "1") Integer current,
+            @RequestParam(defaultValue = "10") Integer size,
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) Integer builtin,
+            @RequestParam(required = false) Boolean assignable) {
+        // 需要认证，但不需要管理员权限（普通用户也可以查看角色列表）
+        PageResponse<RoleListItemResponseDTO> response = roleService.listRoles(current, size, name, builtin, assignable);
+        return ApiResponse.success(response);
     }
 
     @Operation(

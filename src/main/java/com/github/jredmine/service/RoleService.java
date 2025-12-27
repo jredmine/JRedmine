@@ -1,10 +1,13 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.converter.RoleConverter;
 import com.github.jredmine.dto.request.role.RoleCreateRequestDTO;
 import com.github.jredmine.dto.request.role.RoleUpdateRequestDTO;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.role.RoleDetailResponseDTO;
+import com.github.jredmine.dto.response.role.RoleListItemResponseDTO;
 import com.github.jredmine.entity.Role;
 import com.github.jredmine.enums.Permission;
 import com.github.jredmine.enums.ResultCode;
@@ -31,6 +34,62 @@ public class RoleService {
 
     private final RoleMapper roleMapper;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 分页查询角色列表
+     *
+     * @param current    当前页码
+     * @param size       每页数量
+     * @param name       角色名称（模糊查询）
+     * @param builtin    是否内置角色（0=自定义，1-5=内置）
+     * @param assignable 是否可分配
+     * @return 分页响应
+     */
+    public PageResponse<RoleListItemResponseDTO> listRoles(
+            Integer current, Integer size, String name, Integer builtin, Boolean assignable) {
+        // 使用 MDC 添加上下文信息
+        MDC.put("operation", "list_roles");
+
+        try {
+            log.debug("开始查询角色列表，页码: {}, 每页数量: {}", current, size);
+
+            // 创建分页对象
+            Page<Role> page = new Page<>(current, size);
+
+            // 构建查询条件
+            LambdaQueryWrapper<Role> queryWrapper = new LambdaQueryWrapper<>();
+            if (name != null && !name.trim().isEmpty()) {
+                queryWrapper.like(Role::getName, name);
+            }
+            if (builtin != null) {
+                queryWrapper.eq(Role::getBuiltin, builtin);
+            }
+            if (assignable != null) {
+                queryWrapper.eq(Role::getAssignable, assignable);
+            }
+            // 按 position 排序，如果 position 相同则按 id 排序
+            queryWrapper.orderByAsc(Role::getPosition).orderByAsc(Role::getId);
+
+            // 执行分页查询
+            Page<Role> result = roleMapper.selectPage(page, queryWrapper);
+
+            // 添加查询结果到上下文
+            MDC.put("total", String.valueOf(result.getTotal()));
+            log.info("角色列表查询成功，共查询到 {} 条记录", result.getTotal());
+
+            // 转换为响应 DTO
+            return PageResponse.of(
+                    result.getRecords().stream()
+                            .map(RoleConverter.INSTANCE::toRoleListItemResponseDTO)
+                            .toList(),
+                    (int) result.getTotal(),
+                    (int) result.getCurrent(),
+                    (int) result.getSize());
+        } finally {
+            // 清理 MDC
+            MDC.clear();
+        }
+    }
 
     /**
      * 创建角色
