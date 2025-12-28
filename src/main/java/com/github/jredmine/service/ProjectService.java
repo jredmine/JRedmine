@@ -1391,6 +1391,98 @@ public class ProjectService {
     }
 
     /**
+     * 获取项目子项目列表
+     *
+     * @param projectId 项目ID
+     * @return 子项目列表
+     */
+    public List<ProjectListItemResponseDTO> getProjectChildren(Long projectId) {
+        MDC.put("operation", "get_project_children");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.debug("开始查询项目子项目列表，项目ID: {}", projectId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：如果不是管理员，需要检查是否有权限查看
+            if (!isAdmin) {
+                // 公开项目所有用户可见
+                if (Boolean.TRUE.equals(project.getIsPublic())) {
+                    log.debug("项目是公开项目，允许访问，项目ID: {}", projectId);
+                } else {
+                    // 私有项目需要检查用户是否是项目成员
+                    Long currentUserId = currentUser.getId();
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getProjectId, projectId)
+                            .eq(Member::getUserId, currentUserId);
+                    Member member = memberMapper.selectOne(memberQuery);
+
+                    if (member == null) {
+                        log.warn("用户无权限访问私有项目，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.PROJECT_ACCESS_DENIED);
+                    }
+                    log.debug("用户是项目成员，允许访问，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                }
+            }
+
+            // 查询子项目（使用 parent_id 查询）
+            LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Project::getParentId, projectId)
+                    // 默认不显示归档项目
+                    .ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode())
+                    // 按 ID 倒序排序
+                    .orderByDesc(Project::getId);
+
+            // 权限过滤：如果不是管理员，只显示公开项目或用户是成员的项目
+            if (!isAdmin) {
+                Long currentUserId = currentUser.getId();
+                // 获取当前用户是成员的项目ID集合
+                LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                memberQuery.eq(Member::getUserId, currentUserId);
+                List<Member> members = memberMapper.selectList(memberQuery);
+                Set<Long> memberProjectIds = members.stream()
+                        .map(Member::getProjectId)
+                        .collect(Collectors.toSet());
+
+                queryWrapper.and(wrapper -> {
+                    wrapper.eq(Project::getIsPublic, true)
+                            .or(!memberProjectIds.isEmpty(),
+                                    w -> w.in(Project::getId, memberProjectIds));
+                });
+            }
+
+            List<Project> children = projectMapper.selectList(queryWrapper);
+
+            // 转换为响应 DTO
+            List<ProjectListItemResponseDTO> dtoList = children.stream()
+                    .map(this::toProjectListItemResponseDTO)
+                    .toList();
+
+            MDC.put("count", String.valueOf(dtoList.size()));
+            log.info("项目子项目列表查询成功，项目ID: {}, 共查询到 {} 条记录", projectId, dtoList.size());
+
+            return dtoList;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目子项目列表查询失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目子项目列表查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
      * 将 Project 实体转换为 ProjectDetailResponseDTO
      *
      * @param project 项目实体

@@ -25,6 +25,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * 项目管理控制器
  * 负责项目的查询、创建、更新等管理功能
@@ -144,5 +146,12 @@ public class ProjectController {
             @Valid @RequestBody MemberRoleAssignRequestDTO requestDTO) {
         projectService.updateMemberRoles(id, memberId, requestDTO);
         return ApiResponse.success("角色更新成功", null);
+    }
+
+    @Operation(summary = "获取项目子项目列表", description = "获取项目的所有子项目。需要认证，项目成员或系统管理员可访问。", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/{id}/children")
+    public ApiResponse<List<ProjectListItemResponseDTO>> getProjectChildren(@PathVariable Long id) {
+        List<ProjectListItemResponseDTO> result = projectService.getProjectChildren(id);
+        return ApiResponse.success(result);
     }
 }
