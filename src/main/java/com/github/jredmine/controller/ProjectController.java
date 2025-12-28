@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
@@ -162,5 +163,15 @@ public class ProjectController {
             @RequestParam(value = "rootId", required = false) Long rootId) {
         List<ProjectTreeNodeResponseDTO> result = projectService.getProjectTree(rootId);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "项目归档/取消归档", description = "归档或取消归档项目。归档时，如果项目存在未归档的子项目，则不能归档。需要认证，需要 delete_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/{id}/archive")
+    public ApiResponse<ProjectDetailResponseDTO> archiveProject(
+            @PathVariable Long id,
+            @Valid @RequestBody ProjectArchiveRequestDTO requestDTO) {
+        ProjectDetailResponseDTO result = projectService.archiveProject(id, requestDTO);
+        String message = Boolean.TRUE.equals(requestDTO.getArchived()) ? "项目归档成功" : "项目取消归档成功";
+        return ApiResponse.success(message, result);
     }
 }

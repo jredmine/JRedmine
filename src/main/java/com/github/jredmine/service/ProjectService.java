@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.yulichang.wrapper.MPJLambdaWrapper;
 import com.github.yulichang.toolkit.JoinWrappers;
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
@@ -590,6 +591,90 @@ public class ProjectService {
         } catch (Exception e) {
             log.error("项目删除失败，项目ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 归档或取消归档项目
+     *
+     * @param id         项目ID
+     * @param requestDTO 请求DTO
+     * @return 项目详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectDetailResponseDTO archiveProject(Long id, ProjectArchiveRequestDTO requestDTO) {
+        MDC.put("operation", "archive_project");
+        MDC.put("projectId", String.valueOf(id));
+        MDC.put("archived", String.valueOf(requestDTO.getArchived()));
+
+        try {
+            log.debug("开始{}项目，项目ID: {}", requestDTO.getArchived() ? "归档" : "取消归档", id);
+
+            // 权限验证：需要 delete_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // TODO: 检查用户是否有 delete_projects 权限
+                // 这里暂时只允许管理员操作，后续可以添加权限检查
+                log.warn("用户无权限归档项目，项目ID: {}, 用户ID: {}", id, currentUser.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限归档项目");
+            }
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(id);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", id);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 如果是要归档项目
+            if (Boolean.TRUE.equals(requestDTO.getArchived())) {
+                // 检查项目是否已经是归档状态
+                if (ProjectStatus.ARCHIVED.getCode().equals(project.getStatus())) {
+                    log.warn("项目已经是归档状态，项目ID: {}", id);
+                    throw new BusinessException(ResultCode.PARAM_INVALID, "项目已经是归档状态");
+                }
+
+                // 检查是否有未归档的子项目
+                LambdaQueryWrapper<Project> childrenQuery = new LambdaQueryWrapper<>();
+                childrenQuery.eq(Project::getParentId, id)
+                        .ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode()); // 排除已归档的子项目
+                Long childrenCount = projectMapper.selectCount(childrenQuery);
+                if (childrenCount > 0) {
+                    log.warn("项目存在未归档的子项目，不能归档，项目ID: {}, 子项目数量: {}", id, childrenCount);
+                    throw new BusinessException(ResultCode.PROJECT_HAS_CHILDREN,
+                            "项目存在 " + childrenCount + " 个未归档的子项目，请先归档子项目");
+                }
+
+                // 更新项目状态为归档
+                project.setStatus(ProjectStatus.ARCHIVED.getCode());
+                log.info("项目归档成功，项目ID: {}, 项目名称: {}", id, project.getName());
+            } else {
+                // 取消归档：更新项目状态为活跃
+                if (ProjectStatus.ARCHIVED.getCode().equals(project.getStatus())) {
+                    project.setStatus(ProjectStatus.ACTIVE.getCode());
+                    log.info("项目取消归档成功，项目ID: {}, 项目名称: {}", id, project.getName());
+                } else {
+                    log.warn("项目不是归档状态，无法取消归档，项目ID: {}, 当前状态: {}", id, project.getStatus());
+                    throw new BusinessException(ResultCode.PARAM_INVALID, "项目不是归档状态，无法取消归档");
+                }
+            }
+
+            // 更新项目
+            project.setUpdatedOn(new Date());
+            projectMapper.updateById(project);
+
+            // 重新查询项目（获取最新数据）
+            project = projectMapper.selectById(id);
+            return toProjectDetailResponseDTO(project);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目{}失败，项目ID: {}", requestDTO.getArchived() ? "归档" : "取消归档", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR,
+                    "项目" + (requestDTO.getArchived() ? "归档" : "取消归档") + "失败");
         } finally {
             MDC.clear();
         }
