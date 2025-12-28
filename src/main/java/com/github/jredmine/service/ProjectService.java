@@ -1125,6 +1125,71 @@ public class ProjectService {
     }
 
     /**
+     * 移除项目成员
+     *
+     * @param projectId 项目ID
+     * @param memberId  成员ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void removeProjectMember(Long projectId, Long memberId) {
+        MDC.put("operation", "remove_project_member");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("memberId", String.valueOf(memberId));
+
+        try {
+            log.debug("开始移除项目成员，项目ID: {}, 成员ID: {}", projectId, memberId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 权限验证：需要 manage_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // TODO: 检查用户是否有 manage_projects 权限
+                // 这里暂时只允许管理员操作，后续可以添加权限检查
+                log.warn("用户无权限移除项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限移除项目成员");
+            }
+
+            // 验证成员是否存在且属于该项目
+            Member member = memberMapper.selectById(memberId);
+            if (member == null) {
+                log.warn("成员不存在，成员ID: {}", memberId);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "成员不存在");
+            }
+            if (!member.getProjectId().equals(projectId)) {
+                log.warn("成员不属于该项目，项目ID: {}, 成员ID: {}", projectId, memberId);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "成员不属于该项目");
+            }
+
+            // 删除成员角色关联（member_roles 表）
+            LambdaQueryWrapper<MemberRole> roleQuery = new LambdaQueryWrapper<>();
+            roleQuery.eq(MemberRole::getMemberId, memberId.intValue());
+            int deletedRoles = memberRoleMapper.delete(roleQuery);
+            log.debug("删除成员角色关联，成员ID: {}, 删除数量: {}", memberId, deletedRoles);
+
+            // 删除成员记录（members 表）
+            memberMapper.deleteById(memberId);
+            log.debug("删除成员记录，成员ID: {}", memberId);
+
+            log.info("项目成员移除成功，项目ID: {}, 成员ID: {}, 用户ID: {}",
+                    projectId, memberId, member.getUserId());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目成员移除失败，项目ID: {}, 成员ID: {}", projectId, memberId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目成员移除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
      * 将 Project 实体转换为 ProjectDetailResponseDTO
      *
      * @param project 项目实体

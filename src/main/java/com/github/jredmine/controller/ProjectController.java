@@ -115,4 +115,13 @@ public class ProjectController {
         ProjectMemberResponseDTO result = projectService.updateProjectMember(id, memberId, requestDTO);
         return ApiResponse.success("项目成员更新成功", result);
     }
+
+    @Operation(summary = "移除项目成员", description = "从项目中移除成员。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @DeleteMapping("/{id}/members/{memberId}")
+    public ApiResponse<Void> removeProjectMember(
+            @PathVariable Long id,
+            @PathVariable Long memberId) {
+        projectService.removeProjectMember(id, memberId);
+        return ApiResponse.success("项目成员移除成功", null);
+    }
 }
