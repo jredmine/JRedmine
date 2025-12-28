@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
@@ -8,8 +9,11 @@ import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -58,6 +62,18 @@ public class ProjectController {
     public ApiResponse<ProjectDetailResponseDTO> getProjectById(@PathVariable Long id) {
         ProjectDetailResponseDTO result = projectService.getProjectById(id);
         return ApiResponse.success(result);
+    }
+
+    @Operation(
+            summary = "创建项目",
+            description = "创建新项目。需要认证，需要 create_projects 权限或系统管理员。创建者自动成为项目成员。",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @PostMapping
+    public ApiResponse<ProjectDetailResponseDTO> createProject(
+            @Valid @RequestBody ProjectCreateRequestDTO requestDTO) {
+        ProjectDetailResponseDTO result = projectService.createProject(requestDTO);
+        return ApiResponse.success("项目创建成功", result);
     }
 }
 

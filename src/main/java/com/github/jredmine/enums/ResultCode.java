@@ -38,6 +38,11 @@ public enum ResultCode {
     // 项目错误
     PROJECT_NOT_FOUND(404, "项目不存在"),
     PROJECT_ACCESS_DENIED(403, "无权限访问该项目"),
+    PROJECT_NAME_EXISTS(409, "项目名称已存在"),
+    PROJECT_IDENTIFIER_EXISTS(409, "项目标识符已存在"),
+    PROJECT_PARENT_NOT_FOUND(404, "父项目不存在"),
+    PROJECT_MODULE_INVALID(400, "项目模块无效"),
+    TRACKER_NOT_FOUND(404, "跟踪器不存在"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
