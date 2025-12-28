@@ -3,6 +3,7 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -305,8 +306,9 @@ public class ProjectService {
             project.setHomepage(requestDTO.getHomepage());
             project.setIsPublic(requestDTO.getIsPublic() != null ? requestDTO.getIsPublic() : true);
             // 如果 parentId 为 0 或 null，设置为 null（表示没有父项目）
-            project.setParentId(requestDTO.getParentId() != null && requestDTO.getParentId() > 0 
-                    ? requestDTO.getParentId() : null);
+            project.setParentId(requestDTO.getParentId() != null && requestDTO.getParentId() > 0
+                    ? requestDTO.getParentId()
+                    : null);
             project.setIdentifier(requestDTO.getIdentifier());
             project.setStatus(ProjectStatus.ACTIVE.getCode());
             project.setInheritMembers(requestDTO.getInheritMembers() != null ? requestDTO.getInheritMembers() : false);
@@ -365,6 +367,176 @@ public class ProjectService {
     }
 
     /**
+     * 更新项目
+     *
+     * @param id         项目ID
+     * @param requestDTO 更新项目请求
+     * @return 项目详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectDetailResponseDTO updateProject(Long id, ProjectUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_project");
+        MDC.put("projectId", String.valueOf(id));
+
+        try {
+            log.info("开始更新项目，项目ID: {}", id);
+
+            // 权限验证：需要管理员权限（后续可以扩展为检查 edit_projects 权限）
+            securityUtils.requireAdmin();
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(id);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", id);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 验证项目名称唯一性（排除当前项目）
+            if (requestDTO.getName() != null && !requestDTO.getName().equals(project.getName())) {
+                LambdaQueryWrapper<Project> nameQuery = new LambdaQueryWrapper<>();
+                nameQuery.eq(Project::getName, requestDTO.getName())
+                        .ne(Project::getId, id);
+                Project existingProjectByName = projectMapper.selectOne(nameQuery);
+                if (existingProjectByName != null) {
+                    log.warn("项目名称已存在: {}", requestDTO.getName());
+                    throw new BusinessException(ResultCode.PROJECT_NAME_EXISTS);
+                }
+                project.setName(requestDTO.getName());
+            }
+
+            // 验证项目标识符唯一性（排除当前项目）
+            if (requestDTO.getIdentifier() != null && !requestDTO.getIdentifier().trim().isEmpty()
+                    && !requestDTO.getIdentifier().equals(project.getIdentifier())) {
+                LambdaQueryWrapper<Project> identifierQuery = new LambdaQueryWrapper<>();
+                identifierQuery.eq(Project::getIdentifier, requestDTO.getIdentifier())
+                        .ne(Project::getId, id);
+                Project existingProjectByIdentifier = projectMapper.selectOne(identifierQuery);
+                if (existingProjectByIdentifier != null) {
+                    log.warn("项目标识符已存在: {}", requestDTO.getIdentifier());
+                    throw new BusinessException(ResultCode.PROJECT_IDENTIFIER_EXISTS);
+                }
+                project.setIdentifier(requestDTO.getIdentifier());
+            }
+
+            // 验证父项目是否存在（如果指定了父项目，且 parentId > 0）
+            if (requestDTO.getParentId() != null) {
+                if (requestDTO.getParentId() > 0) {
+                    // 不能将项目设置为自己的父项目
+                    if (requestDTO.getParentId().equals(id)) {
+                        log.warn("不能将项目设置为自己的父项目，项目ID: {}", id);
+                        throw new BusinessException(ResultCode.PARAM_INVALID, "不能将项目设置为自己的父项目");
+                    }
+                    Project parentProject = projectMapper.selectById(requestDTO.getParentId());
+                    if (parentProject == null) {
+                        log.warn("父项目不存在，父项目ID: {}", requestDTO.getParentId());
+                        throw new BusinessException(ResultCode.PROJECT_PARENT_NOT_FOUND);
+                    }
+                    project.setParentId(requestDTO.getParentId());
+                } else {
+                    // parentId 为 0，表示没有父项目
+                    project.setParentId(null);
+                }
+            }
+
+            // 更新其他字段
+            if (requestDTO.getDescription() != null) {
+                project.setDescription(requestDTO.getDescription());
+            }
+            if (requestDTO.getHomepage() != null) {
+                project.setHomepage(requestDTO.getHomepage());
+            }
+            if (requestDTO.getIsPublic() != null) {
+                project.setIsPublic(requestDTO.getIsPublic());
+            }
+            if (requestDTO.getStatus() != null && ProjectStatus.isValidCode(requestDTO.getStatus())) {
+                project.setStatus(requestDTO.getStatus());
+            }
+            if (requestDTO.getInheritMembers() != null) {
+                project.setInheritMembers(requestDTO.getInheritMembers());
+            }
+
+            // 更新更新时间
+            project.setUpdatedOn(new Date());
+
+            // 保存项目
+            projectMapper.updateById(project);
+            log.debug("项目信息更新成功，项目ID: {}", id);
+
+            // 更新启用的模块（如果提供了模块列表）
+            if (requestDTO.getEnabledModules() != null) {
+                // 验证模块名称有效性
+                for (String moduleName : requestDTO.getEnabledModules()) {
+                    if (!ProjectModule.isValidCode(moduleName)) {
+                        log.warn("无效的项目模块: {}", moduleName);
+                        throw new BusinessException(ResultCode.PROJECT_MODULE_INVALID, "无效的项目模块: " + moduleName);
+                    }
+                }
+
+                // 删除旧的模块记录
+                LambdaQueryWrapper<EnabledModule> moduleDeleteQuery = new LambdaQueryWrapper<>();
+                moduleDeleteQuery.eq(EnabledModule::getProjectId, id);
+                enabledModuleMapper.delete(moduleDeleteQuery);
+
+                // 创建新的模块记录
+                if (!requestDTO.getEnabledModules().isEmpty()) {
+                    for (String moduleName : requestDTO.getEnabledModules()) {
+                        EnabledModule enabledModule = new EnabledModule();
+                        enabledModule.setProjectId(id);
+                        enabledModule.setName(moduleName);
+                        enabledModuleMapper.insert(enabledModule);
+                    }
+                    log.debug("项目模块更新成功，项目ID: {}, 模块数量: {}", id, requestDTO.getEnabledModules().size());
+                } else {
+                    log.debug("项目模块已清空，项目ID: {}", id);
+                }
+            }
+
+            // 更新项目跟踪器关联（如果提供了跟踪器列表）
+            if (requestDTO.getTrackerIds() != null) {
+                // 验证跟踪器是否存在
+                for (Long trackerId : requestDTO.getTrackerIds()) {
+                    Tracker tracker = trackerMapper.selectById(trackerId);
+                    if (tracker == null) {
+                        log.warn("跟踪器不存在，跟踪器ID: {}", trackerId);
+                        throw new BusinessException(ResultCode.TRACKER_NOT_FOUND, "跟踪器不存在，ID: " + trackerId);
+                    }
+                }
+
+                // 删除旧的跟踪器关联
+                LambdaQueryWrapper<ProjectTracker> trackerDeleteQuery = new LambdaQueryWrapper<>();
+                trackerDeleteQuery.eq(ProjectTracker::getProjectId, id);
+                projectTrackerMapper.delete(trackerDeleteQuery);
+
+                // 创建新的跟踪器关联
+                if (!requestDTO.getTrackerIds().isEmpty()) {
+                    for (Long trackerId : requestDTO.getTrackerIds()) {
+                        ProjectTracker projectTracker = new ProjectTracker();
+                        projectTracker.setProjectId(id);
+                        projectTracker.setTrackerId(trackerId);
+                        projectTrackerMapper.insert(projectTracker);
+                    }
+                    log.debug("项目跟踪器关联更新成功，项目ID: {}, 跟踪器数量: {}", id, requestDTO.getTrackerIds().size());
+                } else {
+                    log.debug("项目跟踪器关联已清空，项目ID: {}", id);
+                }
+            }
+
+            log.info("项目更新成功，项目ID: {}", id);
+
+            // 重新查询项目（获取最新数据）
+            project = projectMapper.selectById(id);
+            return toProjectDetailResponseDTO(project);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目更新失败，项目ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目更新失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
      * 将 Project 实体转换为 ProjectDetailResponseDTO
      *
      * @param project 项目实体
@@ -389,4 +561,3 @@ public class ProjectService {
         return dto;
     }
 }
-
