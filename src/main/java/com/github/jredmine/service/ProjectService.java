@@ -193,26 +193,8 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
 
-            // 权限验证：如果不是管理员，需要检查是否有权限查看
-            if (!isAdmin) {
-                // 公开项目所有用户可见
-                if (Boolean.TRUE.equals(project.getIsPublic())) {
-                    log.debug("项目是公开项目，允许访问，项目ID: {}", id);
-                } else {
-                    // 私有项目需要检查用户是否是项目成员
-                    Long currentUserId = currentUser.getId();
-                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
-                    memberQuery.eq(Member::getProjectId, id)
-                            .eq(Member::getUserId, currentUserId);
-                    Member member = memberMapper.selectOne(memberQuery);
-
-                    if (member == null) {
-                        log.warn("用户无权限访问私有项目，项目ID: {}, 用户ID: {}", id, currentUserId);
-                        throw new BusinessException(ResultCode.PROJECT_ACCESS_DENIED);
-                    }
-                    log.debug("用户是项目成员，允许访问，项目ID: {}, 用户ID: {}", id, currentUserId);
-                }
-            }
+            // 权限验证
+            validateProjectAccess(project, currentUser, isAdmin);
 
             log.info("项目详情查询成功，项目ID: {}", id);
 
@@ -1414,26 +1396,8 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
 
-            // 权限验证：如果不是管理员，需要检查是否有权限查看
-            if (!isAdmin) {
-                // 公开项目所有用户可见
-                if (Boolean.TRUE.equals(project.getIsPublic())) {
-                    log.debug("项目是公开项目，允许访问，项目ID: {}", projectId);
-                } else {
-                    // 私有项目需要检查用户是否是项目成员
-                    Long currentUserId = currentUser.getId();
-                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
-                    memberQuery.eq(Member::getProjectId, projectId)
-                            .eq(Member::getUserId, currentUserId);
-                    Member member = memberMapper.selectOne(memberQuery);
-
-                    if (member == null) {
-                        log.warn("用户无权限访问私有项目，项目ID: {}, 用户ID: {}", projectId, currentUserId);
-                        throw new BusinessException(ResultCode.PROJECT_ACCESS_DENIED);
-                    }
-                    log.debug("用户是项目成员，允许访问，项目ID: {}, 用户ID: {}", projectId, currentUserId);
-                }
-            }
+            // 权限验证
+            validateProjectAccess(project, currentUser, isAdmin);
 
             // 查询子项目（使用 parent_id 查询）
             LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
@@ -1480,6 +1444,40 @@ public class ProjectService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * 验证用户是否有权限访问项目
+     *
+     * @param project     项目实体
+     * @param currentUser 当前用户
+     * @param isAdmin     是否是管理员
+     */
+    private void validateProjectAccess(Project project, User currentUser, boolean isAdmin) {
+        // 管理员可以访问所有项目
+        if (isAdmin) {
+            return;
+        }
+
+        // 公开项目所有用户可见
+        if (Boolean.TRUE.equals(project.getIsPublic())) {
+            log.debug("项目是公开项目，允许访问，项目ID: {}", project.getId());
+            return;
+        }
+
+        // 私有项目需要检查用户是否是项目成员
+        Long currentUserId = currentUser.getId();
+        LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+        memberQuery.eq(Member::getProjectId, project.getId())
+                .eq(Member::getUserId, currentUserId);
+        Member member = memberMapper.selectOne(memberQuery);
+
+        if (member == null) {
+            log.warn("用户无权限访问私有项目，项目ID: {}, 用户ID: {}", project.getId(), currentUserId);
+            throw new BusinessException(ResultCode.PROJECT_ACCESS_DENIED);
+        }
+
+        log.debug("用户是项目成员，允许访问，项目ID: {}, 用户ID: {}", project.getId(), currentUserId);
     }
 
     /**
