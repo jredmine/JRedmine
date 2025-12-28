@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.yulichang.wrapper.MPJLambdaWrapper;
 import com.github.yulichang.toolkit.JoinWrappers;
+import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
@@ -1184,6 +1185,105 @@ public class ProjectService {
         } catch (Exception e) {
             log.error("项目成员移除失败，项目ID: {}, 成员ID: {}", projectId, memberId, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目成员移除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 分配角色给项目成员
+     *
+     * @param projectId  项目ID
+     * @param memberId   成员ID
+     * @param requestDTO 请求DTO
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void assignRolesToMember(Long projectId, Long memberId, MemberRoleAssignRequestDTO requestDTO) {
+        MDC.put("operation", "assign_roles_to_member");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("memberId", String.valueOf(memberId));
+
+        try {
+            log.debug("开始分配角色给项目成员，项目ID: {}, 成员ID: {}, 角色IDs: {}",
+                    projectId, memberId, requestDTO.getRoleIds());
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 权限验证：需要 manage_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // TODO: 检查用户是否有 manage_projects 权限
+                // 这里暂时只允许管理员操作，后续可以添加权限检查
+                log.warn("用户无权限分配角色给项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限分配角色给项目成员");
+            }
+
+            // 验证成员是否存在且属于该项目
+            Member member = memberMapper.selectById(memberId);
+            if (member == null) {
+                log.warn("成员不存在，成员ID: {}", memberId);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "成员不存在");
+            }
+            if (!member.getProjectId().equals(projectId)) {
+                log.warn("成员不属于该项目，项目ID: {}, 成员ID: {}", projectId, memberId);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "成员不属于该项目");
+            }
+
+            // 验证角色是否存在且可分配
+            for (Integer roleId : requestDTO.getRoleIds()) {
+                Role role = roleMapper.selectById(roleId);
+                if (role == null) {
+                    log.warn("角色不存在，角色ID: {}", roleId);
+                    throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+                }
+                // 检查角色是否可分配
+                if (Boolean.FALSE.equals(role.getAssignable())) {
+                    log.warn("角色不可分配，角色ID: {}", roleId);
+                    throw new BusinessException(ResultCode.PARAM_ERROR, "角色不可分配");
+                }
+            }
+
+            // 查询成员已有的角色（只查询直接分配的角色，不包括继承的角色）
+            LambdaQueryWrapper<MemberRole> existingRoleQuery = new LambdaQueryWrapper<>();
+            existingRoleQuery.eq(MemberRole::getMemberId, memberId.intValue())
+                    .isNull(MemberRole::getInheritedFrom);
+            List<MemberRole> existingMemberRoles = memberRoleMapper.selectList(existingRoleQuery);
+            Set<Integer> existingRoleIds = existingMemberRoles.stream()
+                    .map(MemberRole::getRoleId)
+                    .collect(java.util.stream.Collectors.toSet());
+
+            // 添加新的角色关联（跳过已存在的角色）
+            int addedCount = 0;
+            for (Integer roleId : requestDTO.getRoleIds()) {
+                // 如果角色已存在，跳过
+                if (existingRoleIds.contains(roleId)) {
+                    log.debug("成员已有该角色，跳过，成员ID: {}, 角色ID: {}", memberId, roleId);
+                    continue;
+                }
+
+                // 创建新的成员角色关联
+                MemberRole memberRole = new MemberRole();
+                memberRole.setMemberId(memberId.intValue());
+                memberRole.setRoleId(roleId);
+                memberRole.setInheritedFrom(null); // 直接分配的角色，不是继承的
+                memberRoleMapper.insert(memberRole);
+                addedCount++;
+                log.debug("角色分配成功，成员ID: {}, 角色ID: {}", memberId, roleId);
+            }
+
+            log.info("项目成员角色分配成功，项目ID: {}, 成员ID: {}, 新增角色数量: {}",
+                    projectId, memberId, addedCount);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目成员角色分配失败，项目ID: {}, 成员ID: {}", projectId, memberId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目成员角色分配失败");
         } finally {
             MDC.clear();
         }

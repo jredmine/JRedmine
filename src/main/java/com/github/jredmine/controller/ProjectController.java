@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
@@ -123,5 +124,15 @@ public class ProjectController {
             @PathVariable Long memberId) {
         projectService.removeProjectMember(id, memberId);
         return ApiResponse.success("项目成员移除成功", null);
+    }
+
+    @Operation(summary = "分配角色给项目成员", description = "为项目成员分配角色。如果成员已有该角色，则跳过。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PostMapping("/{id}/members/{memberId}/roles")
+    public ApiResponse<Void> assignRolesToMember(
+            @PathVariable Long id,
+            @PathVariable Long memberId,
+            @Valid @RequestBody MemberRoleAssignRequestDTO requestDTO) {
+        projectService.assignRolesToMember(id, memberId, requestDTO);
+        return ApiResponse.success("角色分配成功", null);
     }
 }
