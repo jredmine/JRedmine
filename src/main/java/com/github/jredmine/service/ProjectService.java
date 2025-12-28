@@ -6,6 +6,7 @@ import com.github.yulichang.wrapper.MPJLambdaWrapper;
 import com.github.yulichang.toolkit.JoinWrappers;
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectCopyRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
@@ -591,6 +592,180 @@ public class ProjectService {
         } catch (Exception e) {
             log.error("项目删除失败，项目ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 复制项目
+     *
+     * @param sourceProjectId 源项目ID
+     * @param requestDTO      请求DTO
+     * @return 新项目详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectDetailResponseDTO copyProject(Long sourceProjectId, ProjectCopyRequestDTO requestDTO) {
+        MDC.put("operation", "copy_project");
+        MDC.put("sourceProjectId", String.valueOf(sourceProjectId));
+
+        try {
+            log.debug("开始复制项目，源项目ID: {}, 新项目名称: {}", sourceProjectId, requestDTO.getName());
+
+            // 权限验证：需要 create_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // TODO: 检查用户是否有 create_projects 权限
+                // 这里暂时只允许管理员操作，后续可以添加权限检查
+                log.warn("用户无权限复制项目，源项目ID: {}, 用户ID: {}", sourceProjectId, currentUser.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限复制项目");
+            }
+
+            // 验证源项目是否存在
+            Project sourceProject = projectMapper.selectById(sourceProjectId);
+            if (sourceProject == null) {
+                log.warn("源项目不存在，源项目ID: {}", sourceProjectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 验证新项目名称（必填）
+            if (requestDTO.getName() == null || requestDTO.getName().trim().isEmpty()) {
+                log.warn("新项目名称不能为空");
+                throw new BusinessException(ResultCode.PARAM_ERROR, "新项目名称不能为空");
+            }
+
+            // 验证项目名称唯一性
+            LambdaQueryWrapper<Project> nameQuery = new LambdaQueryWrapper<>();
+            nameQuery.eq(Project::getName, requestDTO.getName());
+            Project existingProjectByName = projectMapper.selectOne(nameQuery);
+            if (existingProjectByName != null) {
+                log.warn("项目名称已存在: {}", requestDTO.getName());
+                throw new BusinessException(ResultCode.PROJECT_NAME_EXISTS);
+            }
+
+            // 验证项目标识符唯一性（如果提供了标识符）
+            if (requestDTO.getIdentifier() != null && !requestDTO.getIdentifier().trim().isEmpty()) {
+                LambdaQueryWrapper<Project> identifierQuery = new LambdaQueryWrapper<>();
+                identifierQuery.eq(Project::getIdentifier, requestDTO.getIdentifier());
+                Project existingProjectByIdentifier = projectMapper.selectOne(identifierQuery);
+                if (existingProjectByIdentifier != null) {
+                    log.warn("项目标识符已存在: {}", requestDTO.getIdentifier());
+                    throw new BusinessException(ResultCode.PROJECT_IDENTIFIER_EXISTS);
+                }
+            }
+
+            // 创建新项目（复制基本信息）
+            Date now = new Date();
+            Project newProject = new Project();
+            newProject.setName(requestDTO.getName());
+            newProject.setDescription(sourceProject.getDescription());
+            newProject.setHomepage(sourceProject.getHomepage());
+            newProject.setIsPublic(sourceProject.getIsPublic());
+            newProject.setParentId(null); // 复制的项目默认没有父项目
+            newProject.setIdentifier(requestDTO.getIdentifier());
+            newProject.setStatus(ProjectStatus.ACTIVE.getCode());
+            newProject.setInheritMembers(sourceProject.getInheritMembers());
+            newProject.setCreatedOn(now);
+            newProject.setUpdatedOn(now);
+
+            // 保存新项目
+            projectMapper.insert(newProject);
+            Long newProjectId = newProject.getId();
+            log.debug("新项目创建成功，项目ID: {}, 项目名称: {}", newProjectId, requestDTO.getName());
+
+            // 创建项目成员（创建者自动成为成员）
+            Long currentUserId = currentUser.getId();
+            Member member = new Member();
+            member.setProjectId(newProjectId);
+            member.setUserId(currentUserId);
+            member.setCreatedOn(now);
+            member.setMailNotification(false);
+            memberMapper.insert(member);
+            log.debug("项目成员创建成功，项目ID: {}, 用户ID: {}", newProjectId, currentUserId);
+
+            // 复制模块（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyModules())) {
+                LambdaQueryWrapper<EnabledModule> moduleQuery = new LambdaQueryWrapper<>();
+                moduleQuery.eq(EnabledModule::getProjectId, sourceProjectId);
+                List<EnabledModule> sourceModules = enabledModuleMapper.selectList(moduleQuery);
+                for (EnabledModule sourceModule : sourceModules) {
+                    EnabledModule newModule = new EnabledModule();
+                    newModule.setProjectId(newProjectId);
+                    newModule.setName(sourceModule.getName());
+                    enabledModuleMapper.insert(newModule);
+                }
+                log.debug("项目模块复制成功，项目ID: {}, 模块数量: {}", newProjectId, sourceModules.size());
+            }
+
+            // 复制跟踪器（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyTrackers())) {
+                LambdaQueryWrapper<ProjectTracker> trackerQuery = new LambdaQueryWrapper<>();
+                trackerQuery.eq(ProjectTracker::getProjectId, sourceProjectId);
+                List<ProjectTracker> sourceTrackers = projectTrackerMapper.selectList(trackerQuery);
+                for (ProjectTracker sourceTracker : sourceTrackers) {
+                    ProjectTracker newTracker = new ProjectTracker();
+                    newTracker.setProjectId(newProjectId);
+                    newTracker.setTrackerId(sourceTracker.getTrackerId());
+                    projectTrackerMapper.insert(newTracker);
+                }
+                log.debug("项目跟踪器复制成功，项目ID: {}, 跟踪器数量: {}", newProjectId, sourceTrackers.size());
+            }
+
+            // 复制成员（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyMembers())) {
+                LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                memberQuery.eq(Member::getProjectId, sourceProjectId);
+                List<Member> sourceMembers = memberMapper.selectList(memberQuery);
+                for (Member sourceMember : sourceMembers) {
+                    // 跳过创建者（已经添加过了）
+                    if (sourceMember.getUserId().equals(currentUserId)) {
+                        continue;
+                    }
+
+                    Member newMember = new Member();
+                    newMember.setProjectId(newProjectId);
+                    newMember.setUserId(sourceMember.getUserId());
+                    newMember.setCreatedOn(now);
+                    newMember.setMailNotification(sourceMember.getMailNotification());
+                    memberMapper.insert(newMember);
+                    Long newMemberId = newMember.getId();
+
+                    // 复制成员角色
+                    LambdaQueryWrapper<MemberRole> roleQuery = new LambdaQueryWrapper<>();
+                    roleQuery.eq(MemberRole::getMemberId, sourceMember.getId().intValue());
+                    List<MemberRole> sourceMemberRoles = memberRoleMapper.selectList(roleQuery);
+                    for (MemberRole sourceMemberRole : sourceMemberRoles) {
+                        MemberRole newMemberRole = new MemberRole();
+                        newMemberRole.setMemberId(newMemberId.intValue());
+                        newMemberRole.setRoleId(sourceMemberRole.getRoleId());
+                        newMemberRole.setInheritedFrom(null); // 复制的角色不是继承的
+                        memberRoleMapper.insert(newMemberRole);
+                    }
+                }
+                log.debug("项目成员复制成功，项目ID: {}, 成员数量: {}", newProjectId, sourceMembers.size());
+            }
+
+            // 复制版本（暂不支持，记录日志）
+            if (Boolean.TRUE.equals(requestDTO.getCopyVersions())) {
+                log.warn("复制版本功能暂未实现，项目ID: {}", newProjectId);
+            }
+
+            // 复制任务（暂不支持，记录日志）
+            if (Boolean.TRUE.equals(requestDTO.getCopyIssues())) {
+                log.warn("复制任务功能暂未实现，项目ID: {}", newProjectId);
+            }
+
+            log.info("项目复制成功，源项目ID: {}, 新项目ID: {}, 新项目名称: {}",
+                    sourceProjectId, newProjectId, requestDTO.getName());
+
+            // 返回新项目详情
+            return toProjectDetailResponseDTO(newProject);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目复制失败，源项目ID: {}", sourceProjectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目复制失败");
         } finally {
             MDC.clear();
         }

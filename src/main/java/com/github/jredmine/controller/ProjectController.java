@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectCopyRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
@@ -173,5 +174,14 @@ public class ProjectController {
         ProjectDetailResponseDTO result = projectService.archiveProject(id, requestDTO);
         String message = Boolean.TRUE.equals(requestDTO.getArchived()) ? "项目归档成功" : "项目取消归档成功";
         return ApiResponse.success(message, result);
+    }
+
+    @Operation(summary = "复制项目", description = "复制项目（包括项目信息、成员、模块、跟踪器等）。需要认证，需要 create_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PostMapping("/{id}/copy")
+    public ApiResponse<ProjectDetailResponseDTO> copyProject(
+            @PathVariable Long id,
+            @Valid @RequestBody ProjectCopyRequestDTO requestDTO) {
+        ProjectDetailResponseDTO result = projectService.copyProject(id, requestDTO);
+        return ApiResponse.success("项目复制成功", result);
     }
 }
