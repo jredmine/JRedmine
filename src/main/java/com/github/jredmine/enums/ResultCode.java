@@ -35,6 +35,10 @@ public enum ResultCode {
     ROLE_CANNOT_MODIFY(400, "系统内置角色不能修改"),
     ROLE_CANNOT_DELETE(400, "系统内置角色不能删除"),
 
+    // 项目错误
+    PROJECT_NOT_FOUND(404, "项目不存在"),
+    PROJECT_ACCESS_DENIED(403, "无权限访问该项目"),
+
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
 
