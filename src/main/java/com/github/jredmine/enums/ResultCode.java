@@ -44,6 +44,8 @@ public enum ResultCode {
     PROJECT_MODULE_INVALID(400, "项目模块无效"),
     PROJECT_HAS_CHILDREN(400, "项目存在子项目，请先删除或归档子项目"),
     TRACKER_NOT_FOUND(404, "跟踪器不存在"),
+    TRACKER_NAME_EXISTS(409, "跟踪器名称已存在"),
+    TRACKER_IN_USE(400, "跟踪器正在被项目使用，不能删除"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
