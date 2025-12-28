@@ -16,6 +16,7 @@ import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberJoinDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.EmailAddress;
@@ -1956,5 +1957,88 @@ public class ProjectService {
         dto.setDefaultAssignedToId(project.getDefaultAssignedToId());
         dto.setDefaultIssueQueryId(project.getDefaultIssueQueryId());
         return dto;
+    }
+
+    /**
+     * 获取项目统计信息
+     *
+     * @param projectId 项目ID
+     * @return 项目统计信息
+     */
+    public ProjectStatisticsResponseDTO getProjectStatistics(Long projectId) {
+        MDC.put("operation", "get_project_statistics");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.debug("开始查询项目统计信息，项目ID: {}", projectId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证
+            validateProjectAccess(project, currentUser, isAdmin);
+
+            // 构建统计信息
+            ProjectStatisticsResponseDTO statistics = new ProjectStatisticsResponseDTO();
+            statistics.setProjectId(projectId);
+            statistics.setProjectName(project.getName());
+            statistics.setLastUpdatedOn(project.getUpdatedOn());
+
+            // 统计成员数量
+            LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+            memberQuery.eq(Member::getProjectId, projectId);
+            Long memberCount = memberMapper.selectCount(memberQuery);
+            statistics.setMemberCount(memberCount.intValue());
+            log.debug("项目成员数量: {}", memberCount);
+
+            // 统计子项目数量（不包括归档的子项目）
+            LambdaQueryWrapper<Project> childrenQuery = new LambdaQueryWrapper<>();
+            childrenQuery.eq(Project::getParentId, projectId)
+                    .ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode());
+            Long childrenCount = projectMapper.selectCount(childrenQuery);
+            statistics.setChildrenCount(childrenCount.intValue());
+            log.debug("项目子项目数量: {}", childrenCount);
+
+            // 统计启用的模块数量
+            LambdaQueryWrapper<EnabledModule> moduleQuery = new LambdaQueryWrapper<>();
+            moduleQuery.eq(EnabledModule::getProjectId, projectId);
+            Long moduleCount = enabledModuleMapper.selectCount(moduleQuery);
+            statistics.setEnabledModuleCount(moduleCount.intValue());
+            log.debug("项目启用模块数量: {}", moduleCount);
+
+            // 统计跟踪器数量
+            LambdaQueryWrapper<ProjectTracker> trackerQuery = new LambdaQueryWrapper<>();
+            trackerQuery.eq(ProjectTracker::getProjectId, projectId);
+            Long trackerCount = projectTrackerMapper.selectCount(trackerQuery);
+            statistics.setTrackerCount(trackerCount.intValue());
+            log.debug("项目跟踪器数量: {}", trackerCount);
+
+            // 任务统计（暂不支持，返回null）
+            // TODO: 等任务管理模块实现后，添加任务统计逻辑
+            statistics.setIssueStatistics(null);
+
+            // 工时统计（暂不支持，返回null）
+            // TODO: 等工时管理模块实现后，添加工时统计逻辑
+            statistics.setTimeEntryStatistics(null);
+
+            log.info("项目统计信息查询成功，项目ID: {}", projectId);
+
+            return statistics;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目统计信息查询失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目统计信息查询失败");
+        } finally {
+            MDC.clear();
+        }
     }
 }

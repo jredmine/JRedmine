@@ -12,6 +12,7 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -183,5 +184,12 @@ public class ProjectController {
             @Valid @RequestBody ProjectCopyRequestDTO requestDTO) {
         ProjectDetailResponseDTO result = projectService.copyProject(id, requestDTO);
         return ApiResponse.success("项目复制成功", result);
+    }
+
+    @Operation(summary = "获取项目统计信息", description = "获取项目统计信息（成员数、子项目数、模块数、跟踪器数等）。任务和工时统计等任务管理模块实现后再完善。需要认证，项目成员或系统管理员可访问。", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/{id}/statistics")
+    public ApiResponse<ProjectStatisticsResponseDTO> getProjectStatistics(@PathVariable Long id) {
+        ProjectStatisticsResponseDTO result = projectService.getProjectStatistics(id);
+        return ApiResponse.success(result);
     }
 }
