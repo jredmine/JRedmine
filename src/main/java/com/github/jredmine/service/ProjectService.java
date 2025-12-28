@@ -14,6 +14,7 @@ import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberJoinDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Member;
@@ -1478,6 +1479,198 @@ public class ProjectService {
         }
 
         log.debug("用户是项目成员，允许访问，项目ID: {}, 用户ID: {}", project.getId(), currentUserId);
+    }
+
+    /**
+     * 获取项目树
+     *
+     * @param rootId 根项目ID（可选，如果不指定，返回所有顶级项目）
+     * @return 项目树列表
+     */
+    public List<ProjectTreeNodeResponseDTO> getProjectTree(Long rootId) {
+        MDC.put("operation", "get_project_tree");
+        if (rootId != null) {
+            MDC.put("rootId", String.valueOf(rootId));
+        }
+
+        try {
+            log.debug("开始查询项目树，根项目ID: {}", rootId);
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 构建查询条件
+            LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
+            // 默认不显示归档项目
+            queryWrapper.ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode());
+
+            // 权限过滤：如果不是管理员，只显示公开项目或用户是成员的项目
+            if (!isAdmin) {
+                Long currentUserId = currentUser.getId();
+                // 获取当前用户是成员的项目ID集合
+                LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                memberQuery.eq(Member::getUserId, currentUserId);
+                List<Member> members = memberMapper.selectList(memberQuery);
+                Set<Long> memberProjectIds = members.stream()
+                        .map(Member::getProjectId)
+                        .collect(Collectors.toSet());
+
+                queryWrapper.and(wrapper -> {
+                    wrapper.eq(Project::getIsPublic, true)
+                            .or(!memberProjectIds.isEmpty(),
+                                    w -> w.in(Project::getId, memberProjectIds));
+                });
+            }
+
+            // 如果指定了根项目ID，验证根项目是否存在
+            if (rootId != null) {
+                Project rootProject = projectMapper.selectById(rootId);
+                if (rootProject == null) {
+                    log.warn("根项目不存在，根项目ID: {}", rootId);
+                    throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+                }
+
+                // 验证用户是否有权限访问根项目
+                validateProjectAccess(rootProject, currentUser, isAdmin);
+
+                // 查询以根项目为根的子树（使用 lft 和 rgt，如果可用）
+                // 如果 lft 和 rgt 为空，则使用 parent_id 递归查询
+                if (rootProject.getLft() != null && rootProject.getRgt() != null) {
+                    // 使用嵌套集合模型查询
+                    queryWrapper.ge(Project::getLft, rootProject.getLft())
+                            .le(Project::getRgt, rootProject.getRgt());
+                } else {
+                    // 使用 parent_id 递归查询（需要查询所有项目，然后在内存中构建树）
+                    // 这里先查询所有项目，然后过滤
+                }
+            }
+
+            // 按 ID 排序
+            queryWrapper.orderByAsc(Project::getId);
+
+            // 执行查询
+            List<Project> allProjects = projectMapper.selectList(queryWrapper);
+
+            // 如果指定了根项目ID且使用 parent_id，需要过滤出子树
+            if (rootId != null) {
+                // 收集所有需要包含的项目ID（包括根项目及其所有子孙项目）
+                Set<Long> includeProjectIds = new java.util.HashSet<>();
+                includeProjectIds.add(rootId);
+                collectDescendantIds(allProjects, rootId, includeProjectIds);
+
+                // 过滤出子树项目
+                allProjects = allProjects.stream()
+                        .filter(p -> includeProjectIds.contains(p.getId()))
+                        .toList();
+            }
+
+            // 构建树形结构
+            List<ProjectTreeNodeResponseDTO> tree = buildProjectTree(allProjects, rootId);
+
+            MDC.put("count", String.valueOf(tree.size()));
+            log.info("项目树查询成功，根项目ID: {}, 共查询到 {} 个根节点", rootId, tree.size());
+
+            return tree;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目树查询失败，根项目ID: {}", rootId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目树查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 递归收集所有子孙项目ID
+     *
+     * @param allProjects 所有项目列表
+     * @param parentId    父项目ID
+     * @param result      结果集合
+     */
+    private void collectDescendantIds(List<Project> allProjects, Long parentId, Set<Long> result) {
+        for (Project project : allProjects) {
+            if (parentId.equals(project.getParentId())) {
+                result.add(project.getId());
+                collectDescendantIds(allProjects, project.getId(), result);
+            }
+        }
+    }
+
+    /**
+     * 构建项目树形结构
+     *
+     * @param allProjects 所有项目列表
+     * @param rootId      根项目ID（如果为null，返回所有顶级项目）
+     * @return 项目树列表
+     */
+    private List<ProjectTreeNodeResponseDTO> buildProjectTree(List<Project> allProjects, Long rootId) {
+        // 将项目列表转换为 Map，便于查找
+        Map<Long, ProjectTreeNodeResponseDTO> nodeMap = new java.util.HashMap<>();
+        for (Project project : allProjects) {
+            ProjectTreeNodeResponseDTO node = toProjectTreeNodeResponseDTO(project);
+            node.setChildren(new java.util.ArrayList<>());
+            nodeMap.put(project.getId(), node);
+        }
+
+        // 构建树形结构
+        List<ProjectTreeNodeResponseDTO> roots = new java.util.ArrayList<>();
+        for (Project project : allProjects) {
+            ProjectTreeNodeResponseDTO node = nodeMap.get(project.getId());
+            Long parentId = project.getParentId();
+
+            if (parentId == null) {
+                // 顶级项目
+                if (rootId == null || project.getId().equals(rootId)) {
+                    roots.add(node);
+                }
+            } else {
+                // 有父项目的项目
+                ProjectTreeNodeResponseDTO parentNode = nodeMap.get(parentId);
+                if (parentNode != null) {
+                    // 父节点在列表中，添加到父节点的子节点列表
+                    parentNode.getChildren().add(node);
+                } else {
+                    // 父节点不在列表中（可能是权限过滤导致的），作为根节点处理
+                    if (rootId == null) {
+                        roots.add(node);
+                    }
+                }
+            }
+        }
+
+        // 如果指定了根项目ID，返回根项目节点（包含子树）
+        if (rootId != null) {
+            ProjectTreeNodeResponseDTO rootNode = nodeMap.get(rootId);
+            if (rootNode != null) {
+                return List.of(rootNode);
+            }
+            // 如果根项目不在列表中，返回空列表
+            return List.of();
+        }
+
+        return roots;
+    }
+
+    /**
+     * 将 Project 实体转换为 ProjectTreeNodeResponseDTO
+     *
+     * @param project 项目实体
+     * @return 响应 DTO
+     */
+    private ProjectTreeNodeResponseDTO toProjectTreeNodeResponseDTO(Project project) {
+        ProjectTreeNodeResponseDTO dto = new ProjectTreeNodeResponseDTO();
+        dto.setId(project.getId());
+        dto.setName(project.getName());
+        dto.setDescription(project.getDescription());
+        dto.setIdentifier(project.getIdentifier());
+        dto.setIsPublic(project.getIsPublic());
+        dto.setStatus(project.getStatus());
+        dto.setParentId(project.getParentId());
+        dto.setCreatedOn(project.getCreatedOn());
+        dto.setUpdatedOn(project.getUpdatedOn());
+        return dto;
     }
 
     /**

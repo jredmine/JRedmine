@@ -10,6 +10,7 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -152,6 +153,14 @@ public class ProjectController {
     @GetMapping("/{id}/children")
     public ApiResponse<List<ProjectListItemResponseDTO>> getProjectChildren(@PathVariable Long id) {
         List<ProjectListItemResponseDTO> result = projectService.getProjectChildren(id);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取项目树", description = "获取项目树形结构（所有项目及其层级关系）。如果指定 rootId，返回以该根项目为根的子树；否则返回所有顶级项目。需要认证，根据项目可见性过滤。", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/tree")
+    public ApiResponse<List<ProjectTreeNodeResponseDTO>> getProjectTree(
+            @RequestParam(value = "rootId", required = false) Long rootId) {
+        List<ProjectTreeNodeResponseDTO> result = projectService.getProjectTree(rootId);
         return ApiResponse.success(result);
     }
 }
