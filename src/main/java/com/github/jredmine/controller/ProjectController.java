@@ -52,17 +52,18 @@ public class ProjectController {
         this.projectService = projectService;
     }
 
-    @Operation(summary = "获取项目列表", description = "分页查询项目列表，支持按名称、状态、是否公开、父项目等条件筛选。需要认证。公开项目所有用户可见，私有项目仅项目成员可见，系统管理员可见所有项目。", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "获取项目列表", description = "分页查询项目列表，支持按关键词（在名称和描述中搜索）、名称（仅在名称中搜索）、状态、是否公开、父项目等条件筛选。需要认证。公开项目所有用户可见，私有项目仅项目成员可见，系统管理员可见所有项目。", security = @SecurityRequirement(name = "bearerAuth"))
     @GetMapping
     public ApiResponse<PageResponse<ProjectListItemResponseDTO>> listProjects(
             @RequestParam(value = "current", defaultValue = "1") Integer current,
             @RequestParam(value = "size", defaultValue = "10") Integer size,
             @RequestParam(value = "name", required = false) String name,
+            @RequestParam(value = "keyword", required = false) String keyword,
             @RequestParam(value = "status", required = false) Integer status,
             @RequestParam(value = "isPublic", required = false) Boolean isPublic,
             @RequestParam(value = "parentId", required = false) Long parentId) {
         PageResponse<ProjectListItemResponseDTO> result = projectService.listProjects(
-                current, size, name, status, isPublic, parentId);
+                current, size, name, keyword, status, isPublic, parentId);
         return ApiResponse.success(result);
     }
 

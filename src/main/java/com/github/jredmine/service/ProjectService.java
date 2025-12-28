@@ -86,18 +86,20 @@ public class ProjectService {
      *
      * @param current  当前页码
      * @param size     每页数量
-     * @param name     项目名称（模糊查询）
+     * @param name     项目名称（模糊查询，只在名称中搜索）
+     * @param keyword  搜索关键词（在名称和描述中搜索，优先级高于 name）
      * @param status   项目状态（1=活跃，5=关闭，9=归档）
      * @param isPublic 是否公开
      * @param parentId 父项目ID
      * @return 分页响应
      */
     public PageResponse<ProjectListItemResponseDTO> listProjects(
-            Integer current, Integer size, String name, Integer status, Boolean isPublic, Long parentId) {
+            Integer current, Integer size, String name, String keyword, Integer status, Boolean isPublic,
+            Long parentId) {
         MDC.put("operation", "list_projects");
 
         try {
-            log.debug("开始查询项目列表，页码: {}, 每页数量: {}", current, size);
+            log.debug("开始查询项目列表，页码: {}, 每页数量: {}, 关键词: {}", current, size, keyword);
 
             // 获取当前用户信息
             User currentUser = securityUtils.getCurrentUser();
@@ -123,9 +125,17 @@ public class ProjectService {
             // 构建查询条件
             LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
 
-            // 名称模糊查询
-            if (name != null && !name.trim().isEmpty()) {
-                queryWrapper.like(Project::getName, name);
+            // 搜索条件：如果提供了 keyword，则在名称和描述中搜索；否则如果提供了 name，则只在名称中搜索
+            if (keyword != null && !keyword.trim().isEmpty()) {
+                // 在名称和描述中搜索关键词
+                queryWrapper.and(wrapper -> {
+                    wrapper.like(Project::getName, keyword.trim())
+                            .or()
+                            .like(Project::getDescription, keyword.trim());
+                });
+            } else if (name != null && !name.trim().isEmpty()) {
+                // 只在名称中模糊查询（保持向后兼容）
+                queryWrapper.like(Project::getName, name.trim());
             }
 
             // 状态筛选
