@@ -2,15 +2,22 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.yulichang.wrapper.MPJLambdaWrapper;
+import com.github.yulichang.toolkit.JoinWrappers;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectMemberJoinDTO;
+import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
+import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Member;
+import com.github.jredmine.entity.MemberRole;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.ProjectTracker;
+import com.github.jredmine.entity.Role;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.enums.ProjectModule;
@@ -22,6 +29,8 @@ import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.project.ProjectTrackerMapper;
+import com.github.jredmine.mapper.user.EmailAddressMapper;
+import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -49,6 +59,8 @@ public class ProjectService {
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectTrackerMapper projectTrackerMapper;
     private final TrackerMapper trackerMapper;
+    private final UserMapper userMapper;
+    private final EmailAddressMapper emailAddressMapper;
     private final SecurityUtils securityUtils;
 
     /**
@@ -588,6 +600,232 @@ public class ProjectService {
         } catch (Exception e) {
             log.error("项目删除失败，项目ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 获取项目成员列表
+     *
+     * @param projectId 项目ID
+     * @param current   当前页码
+     * @param size      每页数量
+     * @param name      用户名称（模糊查询）
+     * @return 分页响应
+     */
+    public PageResponse<ProjectMemberResponseDTO> listProjectMembers(
+            Long projectId, Integer current, Integer size, String name) {
+        MDC.put("operation", "list_project_members");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.debug("开始查询项目成员列表，项目ID: {}, 页码: {}, 每页数量: {}", projectId, current, size);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：如果不是管理员，需要检查是否有权限查看成员
+            if (!isAdmin) {
+                // 公开项目所有用户可见，私有项目需要是成员
+                if (Boolean.FALSE.equals(project.getIsPublic())) {
+                    Long currentUserId = currentUser.getId();
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getProjectId, projectId)
+                            .eq(Member::getUserId, currentUserId);
+                    Member member = memberMapper.selectOne(memberQuery);
+
+                    if (member == null) {
+                        log.warn("用户无权限查看私有项目成员，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.PROJECT_ACCESS_DENIED);
+                    }
+                }
+            }
+
+            // 先查询去重后的成员ID列表（用于分页）
+            // 使用普通查询获取成员列表，然后根据用户名称过滤
+            LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+            memberQuery.eq(Member::getProjectId, projectId);
+            List<Member> allMembers = memberMapper.selectList(memberQuery);
+
+            // 如果提供了名称，需要关联用户表进行过滤
+            if (name != null && !name.trim().isEmpty()) {
+                // 获取所有成员的用户ID
+                List<Long> userIds = allMembers.stream()
+                        .map(Member::getUserId)
+                        .distinct()
+                        .collect(Collectors.toList());
+
+                if (userIds.isEmpty()) {
+                    return PageResponse.of(List.of(), 0, current, size);
+                }
+
+                // 查询用户信息并过滤
+                LambdaQueryWrapper<User> userQuery = new LambdaQueryWrapper<>();
+                userQuery.in(User::getId, userIds)
+                        .and(w -> w
+                                .like(User::getFirstname, name)
+                                .or()
+                                .like(User::getLastname, name)
+                                .or()
+                                .like(User::getLogin, name));
+                List<User> filteredUsers = userMapper.selectList(userQuery);
+                Set<Long> filteredUserIds = filteredUsers.stream()
+                        .map(User::getId)
+                        .collect(Collectors.toSet());
+
+                // 过滤成员列表
+                allMembers = allMembers.stream()
+                        .filter(m -> filteredUserIds.contains(m.getUserId()))
+                        .toList();
+            }
+
+            // 去重并获取成员ID列表
+            List<Long> allMemberIds = allMembers.stream()
+                    .map(Member::getId)
+                    .distinct()
+                    .toList();
+            int totalCount = allMemberIds.size();
+
+            // 计算分页范围
+            int start = (current - 1) * size;
+            if (start >= totalCount) {
+                return PageResponse.of(
+                        List.of(),
+                        totalCount,
+                        current,
+                        size);
+            }
+
+            // 获取当前页的成员ID列表
+            List<Long> memberIds = allMemberIds.stream()
+                    .skip(start)
+                    .limit(size)
+                    .collect(Collectors.toList());
+
+            if (memberIds.isEmpty()) {
+                return PageResponse.of(
+                        List.of(),
+                        totalCount,
+                        current,
+                        size);
+            }
+
+            // 使用 mybatis-plus-join 进行连表查询（只查询当前页的成员）
+            MPJLambdaWrapper<Member> wrapper = JoinWrappers.lambda(Member.class)
+                    // 查询成员表字段
+                    .select(Member::getId, Member::getUserId, Member::getCreatedOn, Member::getMailNotification)
+                    // 查询用户表字段
+                    .select(User::getLogin, User::getFirstname, User::getLastname)
+                    // 查询邮箱表字段（默认邮箱）
+                    .selectAs(EmailAddress::getAddress, ProjectMemberJoinDTO::getEmail)
+                    // 查询角色表字段
+                    .selectAs(Role::getId, ProjectMemberJoinDTO::getRoleId)
+                    .selectAs(Role::getName, ProjectMemberJoinDTO::getRoleName)
+                    // 查询成员角色关联表字段（是否继承）
+                    .select(MemberRole::getInheritedFrom)
+                    // LEFT JOIN 用户表
+                    .leftJoin(User.class, User::getId, Member::getUserId)
+                    // LEFT JOIN 邮箱表（默认邮箱）
+                    // 注意：mybatis-plus-join 的 JOIN 条件写法
+                    // 使用子查询方式获取默认邮箱，或者先 JOIN 所有邮箱再过滤
+                    .leftJoin(EmailAddress.class, EmailAddress::getUserId, User::getId)
+                    // LEFT JOIN 成员角色关联表
+                    .leftJoin(MemberRole.class, MemberRole::getMemberId, Member::getId)
+                    // LEFT JOIN 角色表
+                    .leftJoin(Role.class, Role::getId, MemberRole::getRoleId)
+                    // 查询条件：项目ID 和 成员ID列表
+                    .eq(Member::getProjectId, projectId)
+                    .in(Member::getId, memberIds)
+                    // 按成员ID排序
+                    .orderByAsc(Member::getId);
+
+            // 执行连表查询（不分页，因为已经手动分页了）
+            List<ProjectMemberJoinDTO> joinResults = memberMapper.selectJoinList(
+                    ProjectMemberJoinDTO.class, wrapper);
+
+            // 由于一个成员可能有多个角色，连表查询会返回多条记录
+            // 需要按成员ID分组，组装成最终结果
+            java.util.Map<Long, ProjectMemberResponseDTO> memberMap = new java.util.LinkedHashMap<>();
+
+            // 先查询所有用户的默认邮箱，用于后续过滤
+            Set<Long> userIds = joinResults.stream()
+                    .map(ProjectMemberJoinDTO::getUserId)
+                    .filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toSet());
+
+            Map<Long, String> userEmailMap = new java.util.HashMap<>();
+            if (!userIds.isEmpty()) {
+                LambdaQueryWrapper<EmailAddress> emailQuery = new LambdaQueryWrapper<>();
+                emailQuery.in(EmailAddress::getUserId, userIds)
+                        .eq(EmailAddress::getIsDefault, true);
+                List<EmailAddress> defaultEmails = emailAddressMapper.selectList(emailQuery);
+                userEmailMap = defaultEmails.stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                EmailAddress::getUserId,
+                                EmailAddress::getAddress,
+                                (v1, v2) -> v1)); // 如果有多个默认邮箱，取第一个
+            }
+
+            for (ProjectMemberJoinDTO joinDTO : joinResults) {
+                Long memberId = joinDTO.getId();
+                ProjectMemberResponseDTO dto = memberMap.get(memberId);
+
+                if (dto == null) {
+                    // 创建新的成员DTO
+                    dto = new ProjectMemberResponseDTO();
+                    dto.setId(joinDTO.getId());
+                    dto.setUserId(joinDTO.getUserId());
+                    dto.setLogin(joinDTO.getLogin());
+                    dto.setFirstname(joinDTO.getFirstname());
+                    dto.setLastname(joinDTO.getLastname());
+                    // 使用查询到的默认邮箱，而不是 JOIN 结果中的邮箱（因为可能 JOIN 到多个邮箱）
+                    dto.setEmail(userEmailMap.get(joinDTO.getUserId()));
+                    dto.setCreatedOn(joinDTO.getCreatedOn());
+                    dto.setMailNotification(joinDTO.getMailNotification());
+                    dto.setRoles(new java.util.ArrayList<>());
+                    memberMap.put(memberId, dto);
+                }
+
+                // 添加角色信息（如果存在且未重复）
+                if (joinDTO.getRoleId() != null) {
+                    // 检查是否已经添加过该角色（避免重复）
+                    boolean roleExists = dto.getRoles().stream()
+                            .anyMatch(r -> r.getRoleId().equals(joinDTO.getRoleId()));
+                    if (!roleExists) {
+                        ProjectMemberResponseDTO.MemberRoleInfo roleInfo = new ProjectMemberResponseDTO.MemberRoleInfo();
+                        roleInfo.setRoleId(joinDTO.getRoleId());
+                        roleInfo.setRoleName(joinDTO.getRoleName());
+                        roleInfo.setInherited(joinDTO.getInheritedFrom() != null);
+                        dto.getRoles().add(roleInfo);
+                    }
+                }
+            }
+
+            // 转换为列表（按成员ID顺序）
+            List<ProjectMemberResponseDTO> dtoList = new java.util.ArrayList<>(memberMap.values());
+
+            MDC.put("total", String.valueOf(totalCount));
+            log.info("项目成员列表查询成功，项目ID: {}, 共查询到 {} 条记录", projectId, totalCount);
+
+            return PageResponse.of(
+                    dtoList,
+                    totalCount,
+                    current,
+                    size);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目成员列表查询失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目成员列表查询失败");
         } finally {
             MDC.clear();
         }

@@ -6,6 +6,7 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -81,5 +82,16 @@ public class ProjectController {
     public ApiResponse<Void> deleteProject(@PathVariable Long id) {
         projectService.deleteProject(id);
         return ApiResponse.success("项目删除成功", null);
+    }
+
+    @Operation(summary = "获取项目成员列表", description = "获取项目的所有成员列表，支持分页和按用户名称模糊查询。需要认证，项目成员或系统管理员可访问。", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/{id}/members")
+    public ApiResponse<PageResponse<ProjectMemberResponseDTO>> listProjectMembers(
+            @PathVariable Long id,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "10") Integer size,
+            @RequestParam(value = "name", required = false) String name) {
+        PageResponse<ProjectMemberResponseDTO> result = projectService.listProjectMembers(id, current, size, name);
+        return ApiResponse.success(result);
     }
 }
