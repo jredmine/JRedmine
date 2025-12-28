@@ -1,6 +1,5 @@
 package com.github.jredmine.dto.request.project;
 
-import jakarta.validation.constraints.NotEmpty;
 import lombok.Data;
 
 import java.util.List;
@@ -13,9 +12,7 @@ import java.util.List;
 @Data
 public class MemberRoleAssignRequestDTO {
     /**
-     * 角色ID列表
+     * 角色ID列表（可选，用于更新接口时可以传空数组清空角色）
      */
-    @NotEmpty(message = "角色ID列表不能为空")
     private List<Integer> roleIds;
 }
-

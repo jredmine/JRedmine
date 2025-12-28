@@ -135,4 +135,14 @@ public class ProjectController {
         projectService.assignRolesToMember(id, memberId, requestDTO);
         return ApiResponse.success("角色分配成功", null);
     }
+
+    @Operation(summary = "更新项目成员角色", description = "更新项目成员的角色（替换现有直接分配的角色，保留继承的角色）。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/{id}/members/{memberId}/roles")
+    public ApiResponse<Void> updateMemberRoles(
+            @PathVariable Long id,
+            @PathVariable Long memberId,
+            @Valid @RequestBody MemberRoleAssignRequestDTO requestDTO) {
+        projectService.updateMemberRoles(id, memberId, requestDTO);
+        return ApiResponse.success("角色更新成功", null);
+    }
 }
