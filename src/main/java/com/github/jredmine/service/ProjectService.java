@@ -537,6 +537,63 @@ public class ProjectService {
     }
 
     /**
+     * 删除项目（软删除，更新状态为归档）
+     *
+     * @param id 项目ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteProject(Long id) {
+        MDC.put("operation", "delete_project");
+        MDC.put("projectId", String.valueOf(id));
+
+        try {
+            log.info("开始删除项目，项目ID: {}", id);
+
+            // 权限验证：需要管理员权限（后续可以扩展为检查 delete_projects 权限）
+            securityUtils.requireAdmin();
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(id);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", id);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 检查项目是否已经是归档状态
+            if (ProjectStatus.ARCHIVED.getCode().equals(project.getStatus())) {
+                log.warn("项目已经是归档状态，项目ID: {}", id);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目已经是归档状态");
+            }
+
+            // 检查是否有子项目
+            LambdaQueryWrapper<Project> childrenQuery = new LambdaQueryWrapper<>();
+            childrenQuery.eq(Project::getParentId, id)
+                    .ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode()); // 排除已归档的子项目
+            Long childrenCount = projectMapper.selectCount(childrenQuery);
+            if (childrenCount > 0) {
+                log.warn("项目存在子项目，不能删除，项目ID: {}, 子项目数量: {}", id, childrenCount);
+                throw new BusinessException(ResultCode.PROJECT_HAS_CHILDREN,
+                        "项目存在 " + childrenCount + " 个子项目，请先删除或归档子项目");
+            }
+
+            // 更新项目状态为归档（软删除）
+            project.setStatus(ProjectStatus.ARCHIVED.getCode());
+            project.setUpdatedOn(new Date());
+            projectMapper.updateById(project);
+
+            log.info("项目删除成功（已归档），项目ID: {}, 项目名称: {}", id, project.getName());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目删除失败，项目ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
      * 将 Project 实体转换为 ProjectDetailResponseDTO
      *
      * @param project 项目实体

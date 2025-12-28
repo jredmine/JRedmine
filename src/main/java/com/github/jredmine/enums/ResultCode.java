@@ -42,6 +42,7 @@ public enum ResultCode {
     PROJECT_IDENTIFIER_EXISTS(409, "项目标识符已存在"),
     PROJECT_PARENT_NOT_FOUND(404, "父项目不存在"),
     PROJECT_MODULE_INVALID(400, "项目模块无效"),
+    PROJECT_HAS_CHILDREN(400, "项目存在子项目，请先删除或归档子项目"),
     TRACKER_NOT_FOUND(404, "跟踪器不存在"),
 
     // 菜单错误
@@ -60,4 +61,3 @@ public enum ResultCode {
         this.message = message;
     }
 }
-

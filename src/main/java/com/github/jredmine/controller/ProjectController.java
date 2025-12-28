@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -73,5 +74,12 @@ public class ProjectController {
             @Valid @RequestBody ProjectUpdateRequestDTO requestDTO) {
         ProjectDetailResponseDTO result = projectService.updateProject(id, requestDTO);
         return ApiResponse.success("项目更新成功", result);
+    }
+
+    @Operation(summary = "删除项目", description = "删除项目（软删除，更新状态为归档）。需要认证，需要 delete_projects 权限或系统管理员。如果项目存在子项目，则不能删除。", security = @SecurityRequirement(name = "bearerAuth"))
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteProject(@PathVariable Long id) {
+        projectService.deleteProject(id);
+        return ApiResponse.success("项目删除成功", null);
     }
 }
