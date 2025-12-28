@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
@@ -103,5 +104,15 @@ public class ProjectController {
             @Valid @RequestBody ProjectMemberCreateRequestDTO requestDTO) {
         ProjectMemberResponseDTO result = projectService.createProjectMember(id, requestDTO);
         return ApiResponse.success("项目成员添加成功", result);
+    }
+
+    @Operation(summary = "更新项目成员", description = "更新项目成员信息（如邮件通知设置、角色等）。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/{id}/members/{memberId}")
+    public ApiResponse<ProjectMemberResponseDTO> updateProjectMember(
+            @PathVariable Long id,
+            @PathVariable Long memberId,
+            @Valid @RequestBody ProjectMemberUpdateRequestDTO requestDTO) {
+        ProjectMemberResponseDTO result = projectService.updateProjectMember(id, memberId, requestDTO);
+        return ApiResponse.success("项目成员更新成功", result);
     }
 }

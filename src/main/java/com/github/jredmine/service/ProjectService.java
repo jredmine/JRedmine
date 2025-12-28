@@ -6,6 +6,7 @@ import com.github.yulichang.wrapper.MPJLambdaWrapper;
 import com.github.yulichang.toolkit.JoinWrappers;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
@@ -972,6 +973,152 @@ public class ProjectService {
         } catch (Exception e) {
             log.error("项目成员新增失败，项目ID: {}, 用户ID: {}", projectId, requestDTO.getUserId(), e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目成员新增失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 更新项目成员
+     *
+     * @param projectId  项目ID
+     * @param memberId   成员ID
+     * @param requestDTO 请求DTO
+     * @return 项目成员响应DTO
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectMemberResponseDTO updateProjectMember(Long projectId, Long memberId,
+            ProjectMemberUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_project_member");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("memberId", String.valueOf(memberId));
+
+        try {
+            log.debug("开始更新项目成员，项目ID: {}, 成员ID: {}", projectId, memberId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 权限验证：需要 manage_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // TODO: 检查用户是否有 manage_projects 权限
+                // 这里暂时只允许管理员操作，后续可以添加权限检查
+                log.warn("用户无权限更新项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新项目成员");
+            }
+
+            // 验证成员是否存在且属于该项目
+            Member member = memberMapper.selectById(memberId);
+            if (member == null) {
+                log.warn("成员不存在，成员ID: {}", memberId);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "成员不存在");
+            }
+            if (!member.getProjectId().equals(projectId)) {
+                log.warn("成员不属于该项目，项目ID: {}, 成员ID: {}", projectId, memberId);
+                throw new BusinessException(ResultCode.PARAM_ERROR, "成员不属于该项目");
+            }
+
+            // 更新成员信息（邮件通知设置）
+            if (requestDTO.getMailNotification() != null) {
+                member.setMailNotification(requestDTO.getMailNotification());
+                memberMapper.updateById(member);
+                log.debug("项目成员信息更新成功，成员ID: {}, 邮件通知: {}", memberId, requestDTO.getMailNotification());
+            }
+
+            // 更新成员角色（删除旧的，添加新的）
+            if (requestDTO.getRoleIds() != null) {
+                // 验证角色是否存在且可分配
+                for (Integer roleId : requestDTO.getRoleIds()) {
+                    Role role = roleMapper.selectById(roleId);
+                    if (role == null) {
+                        log.warn("角色不存在，角色ID: {}", roleId);
+                        throw new BusinessException(ResultCode.ROLE_NOT_FOUND);
+                    }
+                    // 检查角色是否可分配
+                    if (Boolean.FALSE.equals(role.getAssignable())) {
+                        log.warn("角色不可分配，角色ID: {}", roleId);
+                        throw new BusinessException(ResultCode.PARAM_ERROR, "角色不可分配");
+                    }
+                }
+
+                // 删除旧的成员角色关联（只删除非继承的角色）
+                LambdaQueryWrapper<MemberRole> deleteQuery = new LambdaQueryWrapper<>();
+                deleteQuery.eq(MemberRole::getMemberId, memberId.intValue())
+                        .isNull(MemberRole::getInheritedFrom); // 只删除直接分配的角色，保留继承的角色
+                memberRoleMapper.delete(deleteQuery);
+                log.debug("删除旧的成员角色关联，成员ID: {}", memberId);
+
+                // 添加新的成员角色关联
+                if (!requestDTO.getRoleIds().isEmpty()) {
+                    for (Integer roleId : requestDTO.getRoleIds()) {
+                        MemberRole memberRole = new MemberRole();
+                        memberRole.setMemberId(memberId.intValue());
+                        memberRole.setRoleId(roleId);
+                        memberRole.setInheritedFrom(null); // 直接分配的角色，不是继承的
+                        memberRoleMapper.insert(memberRole);
+                    }
+                    log.debug("项目成员角色关联更新成功，成员ID: {}, 角色数量: {}",
+                            memberId, requestDTO.getRoleIds().size());
+                }
+            }
+
+            // 查询并返回更新后的成员信息
+            // 查询用户信息
+            User user = userMapper.selectById(member.getUserId());
+            if (user == null) {
+                log.warn("用户不存在，用户ID: {}", member.getUserId());
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 构造响应DTO
+            ProjectMemberResponseDTO responseDTO = new ProjectMemberResponseDTO();
+            responseDTO.setId(memberId);
+            responseDTO.setUserId(user.getId());
+            responseDTO.setLogin(user.getLogin());
+            responseDTO.setFirstname(user.getFirstname());
+            responseDTO.setLastname(user.getLastname());
+            responseDTO.setCreatedOn(member.getCreatedOn());
+            responseDTO.setMailNotification(member.getMailNotification());
+
+            // 查询用户默认邮箱
+            LambdaQueryWrapper<EmailAddress> emailQuery = new LambdaQueryWrapper<>();
+            emailQuery.eq(EmailAddress::getUserId, user.getId())
+                    .eq(EmailAddress::getIsDefault, true);
+            EmailAddress defaultEmail = emailAddressMapper.selectOne(emailQuery);
+            responseDTO.setEmail(defaultEmail != null ? defaultEmail.getAddress() : null);
+
+            // 查询角色信息（包括继承的角色）
+            List<ProjectMemberResponseDTO.MemberRoleInfo> roles = new java.util.ArrayList<>();
+            LambdaQueryWrapper<MemberRole> roleQuery = new LambdaQueryWrapper<>();
+            roleQuery.eq(MemberRole::getMemberId, memberId.intValue());
+            List<MemberRole> memberRoles = memberRoleMapper.selectList(roleQuery);
+
+            for (MemberRole memberRole : memberRoles) {
+                Role role = roleMapper.selectById(memberRole.getRoleId());
+                if (role != null) {
+                    ProjectMemberResponseDTO.MemberRoleInfo roleInfo = new ProjectMemberResponseDTO.MemberRoleInfo();
+                    roleInfo.setRoleId(role.getId());
+                    roleInfo.setRoleName(role.getName());
+                    roleInfo.setInherited(memberRole.getInheritedFrom() != null);
+                    roles.add(roleInfo);
+                }
+            }
+            responseDTO.setRoles(roles);
+
+            log.info("项目成员更新成功，项目ID: {}, 成员ID: {}", projectId, memberId);
+
+            return responseDTO;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目成员更新失败，项目ID: {}, 成员ID: {}", projectId, memberId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目成员更新失败");
         } finally {
             MDC.clear();
         }
