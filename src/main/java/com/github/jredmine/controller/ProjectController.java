@@ -6,6 +6,9 @@ import com.github.jredmine.dto.request.project.ProjectCopyRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectFromTemplateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectTemplateCreateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectTemplateUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
@@ -13,6 +16,7 @@ import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -191,5 +195,55 @@ public class ProjectController {
     public ApiResponse<ProjectStatisticsResponseDTO> getProjectStatistics(@PathVariable Long id) {
         ProjectStatisticsResponseDTO result = projectService.getProjectStatistics(id);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "创建项目模板", description = "创建项目模板。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PostMapping("/templates")
+    public ApiResponse<ProjectTemplateResponseDTO> createTemplate(
+            @Valid @RequestBody ProjectTemplateCreateRequestDTO requestDTO) {
+        ProjectTemplateResponseDTO result = projectService.createTemplate(requestDTO);
+        return ApiResponse.success("项目模板创建成功", result);
+    }
+
+    @Operation(summary = "获取项目模板列表", description = "分页查询项目模板列表，支持按名称模糊查询。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/templates")
+    public ApiResponse<PageResponse<ProjectTemplateResponseDTO>> listTemplates(
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "10") Integer size,
+            @RequestParam(value = "name", required = false) String name) {
+        PageResponse<ProjectTemplateResponseDTO> result = projectService.listTemplates(current, size, name);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取项目模板详情", description = "根据模板ID查询模板详细信息。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @GetMapping("/templates/{id}")
+    public ApiResponse<ProjectTemplateResponseDTO> getTemplateById(@PathVariable Long id) {
+        ProjectTemplateResponseDTO result = projectService.getTemplateById(id);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "更新项目模板", description = "更新项目模板信息（名称、描述、模块、跟踪器、默认角色等）。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PutMapping("/templates/{id}")
+    public ApiResponse<ProjectTemplateResponseDTO> updateTemplate(
+            @PathVariable Long id,
+            @Valid @RequestBody ProjectTemplateUpdateRequestDTO requestDTO) {
+        ProjectTemplateResponseDTO result = projectService.updateTemplate(id, requestDTO);
+        return ApiResponse.success("项目模板更新成功", result);
+    }
+
+    @Operation(summary = "从模板创建项目", description = "从项目模板创建新项目。需要认证，需要 create_projects 权限或系统管理员。如果模板有默认角色，会自动分配给项目创建者。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PostMapping("/from-template/{templateId}")
+    public ApiResponse<ProjectDetailResponseDTO> createProjectFromTemplate(
+            @PathVariable Long templateId,
+            @Valid @RequestBody ProjectFromTemplateRequestDTO requestDTO) {
+        ProjectDetailResponseDTO result = projectService.createProjectFromTemplate(templateId, requestDTO);
+        return ApiResponse.success("从模板创建项目成功", result);
+    }
+
+    @Operation(summary = "删除项目模板", description = "删除项目模板。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @DeleteMapping("/templates/{id}")
+    public ApiResponse<Void> deleteTemplate(@PathVariable Long id) {
+        projectService.deleteTemplate(id);
+        return ApiResponse.success("项目模板删除成功", null);
     }
 }

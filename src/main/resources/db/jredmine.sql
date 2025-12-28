@@ -607,6 +607,17 @@ CREATE TABLE `projects_trackers` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ----------------------------
+-- Table structure for project_template_roles
+-- ----------------------------
+DROP TABLE IF EXISTS `project_template_roles`;
+CREATE TABLE `project_template_roles` (
+  `project_id` int NOT NULL DEFAULT '0',
+  `role_id` int NOT NULL DEFAULT '0',
+  UNIQUE KEY `project_template_roles_unique` (`project_id`,`role_id`),
+  KEY `project_template_roles_project_id` (`project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ----------------------------
 -- Table structure for queries
 -- ----------------------------
 DROP TABLE IF EXISTS `queries`;

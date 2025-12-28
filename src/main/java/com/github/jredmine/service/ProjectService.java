@@ -8,6 +8,9 @@ import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCopyRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectFromTemplateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectTemplateCreateRequestDTO;
+import com.github.jredmine.dto.request.project.ProjectTemplateUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
@@ -17,12 +20,14 @@ import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberJoinDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
+import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Member;
 import com.github.jredmine.entity.MemberRole;
 import com.github.jredmine.entity.Project;
+import com.github.jredmine.entity.ProjectTemplateRole;
 import com.github.jredmine.entity.ProjectTracker;
 import com.github.jredmine.entity.Role;
 import com.github.jredmine.entity.Tracker;
@@ -35,6 +40,7 @@ import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
+import com.github.jredmine.mapper.project.ProjectTemplateRoleMapper;
 import com.github.jredmine.mapper.project.ProjectTrackerMapper;
 import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.MemberRoleMapper;
@@ -67,6 +73,7 @@ public class ProjectService {
     private final MemberMapper memberMapper;
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectTrackerMapper projectTrackerMapper;
+    private final ProjectTemplateRoleMapper projectTemplateRoleMapper;
     private final TrackerMapper trackerMapper;
     private final UserMapper userMapper;
     private final EmailAddressMapper emailAddressMapper;
@@ -125,8 +132,9 @@ public class ProjectService {
             if (status != null && ProjectStatus.isValidCode(status)) {
                 queryWrapper.eq(Project::getStatus, status);
             } else {
-                // 默认不显示归档项目
-                queryWrapper.ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode());
+                // 默认不显示归档项目和模板
+                queryWrapper.ne(Project::getStatus, ProjectStatus.ARCHIVED.getCode())
+                        .ne(Project::getStatus, ProjectStatus.TEMPLATE.getCode());
             }
 
             // 是否公开筛选
@@ -2040,5 +2048,601 @@ public class ProjectService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * 创建项目模板
+     *
+     * @param requestDTO 创建模板请求
+     * @return 模板详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectTemplateResponseDTO createTemplate(ProjectTemplateCreateRequestDTO requestDTO) {
+        MDC.put("operation", "create_template");
+
+        try {
+            log.info("开始创建项目模板，模板名称: {}", requestDTO.getName());
+
+            // 权限验证：需要管理员权限
+            securityUtils.requireAdmin();
+
+            // 验证模板名称
+            if (requestDTO.getName() == null || requestDTO.getName().trim().isEmpty()) {
+                log.warn("模板名称不能为空");
+                throw new BusinessException(ResultCode.PARAM_INVALID, "模板名称不能为空");
+            }
+
+            // 验证模块有效性
+            if (requestDTO.getEnabledModules() != null && !requestDTO.getEnabledModules().isEmpty()) {
+                for (String moduleName : requestDTO.getEnabledModules()) {
+                    if (!ProjectModule.isValidCode(moduleName)) {
+                        log.warn("无效的模块名称: {}", moduleName);
+                        throw new BusinessException(ResultCode.PARAM_INVALID, "无效的模块名称: " + moduleName);
+                    }
+                }
+            }
+
+            // 验证跟踪器是否存在
+            if (requestDTO.getTrackerIds() != null && !requestDTO.getTrackerIds().isEmpty()) {
+                for (Long trackerId : requestDTO.getTrackerIds()) {
+                    Tracker tracker = trackerMapper.selectById(trackerId);
+                    if (tracker == null) {
+                        log.warn("跟踪器不存在，跟踪器ID: {}", trackerId);
+                        throw new BusinessException(ResultCode.TRACKER_NOT_FOUND, "跟踪器不存在，ID: " + trackerId);
+                    }
+                }
+            }
+
+            // 验证角色是否存在
+            if (requestDTO.getDefaultRoles() != null && !requestDTO.getDefaultRoles().isEmpty()) {
+                for (Integer roleId : requestDTO.getDefaultRoles()) {
+                    Role role = roleMapper.selectById(roleId);
+                    if (role == null) {
+                        log.warn("角色不存在，角色ID: {}", roleId);
+                        throw new BusinessException(ResultCode.ROLE_NOT_FOUND, "角色不存在，ID: " + roleId);
+                    }
+                }
+            }
+
+            // 创建模板项目实体（使用 TEMPLATE 状态）
+            Project template = new Project();
+            template.setName(requestDTO.getName());
+            template.setDescription(requestDTO.getDescription());
+            template.setIsPublic(false); // 模板默认私有
+            template.setStatus(ProjectStatus.TEMPLATE.getCode());
+            Date now = new Date();
+            template.setCreatedOn(now);
+            template.setUpdatedOn(now);
+
+            // 保存模板
+            projectMapper.insert(template);
+            Long templateId = template.getId();
+            log.debug("模板创建成功，模板ID: {}", templateId);
+
+            // 创建启用的模块记录
+            if (requestDTO.getEnabledModules() != null && !requestDTO.getEnabledModules().isEmpty()) {
+                for (String moduleName : requestDTO.getEnabledModules()) {
+                    EnabledModule enabledModule = new EnabledModule();
+                    enabledModule.setProjectId(templateId);
+                    enabledModule.setName(moduleName);
+                    enabledModuleMapper.insert(enabledModule);
+                }
+                log.debug("模板模块创建成功，模板ID: {}, 模块数量: {}", templateId, requestDTO.getEnabledModules().size());
+            }
+
+            // 创建模板跟踪器关联
+            if (requestDTO.getTrackerIds() != null && !requestDTO.getTrackerIds().isEmpty()) {
+                for (Long trackerId : requestDTO.getTrackerIds()) {
+                    ProjectTracker projectTracker = new ProjectTracker();
+                    projectTracker.setProjectId(templateId);
+                    projectTracker.setTrackerId(trackerId);
+                    projectTrackerMapper.insert(projectTracker);
+                }
+                log.debug("模板跟踪器关联创建成功，模板ID: {}, 跟踪器数量: {}", templateId, requestDTO.getTrackerIds().size());
+            }
+
+            // 创建模板默认角色关联
+            if (requestDTO.getDefaultRoles() != null && !requestDTO.getDefaultRoles().isEmpty()) {
+                for (Integer roleId : requestDTO.getDefaultRoles()) {
+                    ProjectTemplateRole templateRole = new ProjectTemplateRole();
+                    templateRole.setProjectId(templateId);
+                    templateRole.setRoleId(roleId);
+                    projectTemplateRoleMapper.insert(templateRole);
+                }
+                log.debug("模板默认角色关联创建成功，模板ID: {}, 角色数量: {}", templateId, requestDTO.getDefaultRoles().size());
+            }
+
+            log.info("项目模板创建成功，模板ID: {}, 模板名称: {}", templateId, requestDTO.getName());
+
+            // 返回模板详情
+            return toProjectTemplateResponseDTO(template);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目模板创建失败，模板名称: {}", requestDTO.getName(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目模板创建失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 获取项目模板列表
+     *
+     * @param current 当前页码
+     * @param size    每页数量
+     * @param name    模板名称（模糊查询）
+     * @return 分页响应
+     */
+    public PageResponse<ProjectTemplateResponseDTO> listTemplates(Integer current, Integer size, String name) {
+        MDC.put("operation", "list_templates");
+
+        try {
+            log.debug("开始查询项目模板列表，页码: {}, 每页数量: {}", current, size);
+
+            // 权限验证：需要管理员权限
+            securityUtils.requireAdmin();
+
+            // 构建查询条件
+            LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Project::getStatus, ProjectStatus.TEMPLATE.getCode());
+
+            // 名称模糊查询
+            if (name != null && !name.trim().isEmpty()) {
+                queryWrapper.like(Project::getName, name.trim());
+            }
+
+            // 按ID倒序排序
+            queryWrapper.orderByDesc(Project::getId);
+
+            // 分页查询
+            Page<Project> page = new Page<>(current != null ? current : 1, size != null ? size : 10);
+            Page<Project> resultPage = projectMapper.selectPage(page, queryWrapper);
+
+            // 转换为响应DTO
+            List<ProjectTemplateResponseDTO> templateList = resultPage.getRecords().stream()
+                    .map(this::toProjectTemplateResponseDTO)
+                    .collect(Collectors.toList());
+
+            log.info("项目模板列表查询成功，总数: {}, 当前页: {}", resultPage.getTotal(), current);
+
+            return PageResponse.of(templateList, (int) resultPage.getTotal(), (int) resultPage.getCurrent(),
+                    (int) resultPage.getSize());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目模板列表查询失败", e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目模板列表查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 获取项目模板详情
+     *
+     * @param templateId 模板ID
+     * @return 模板详情
+     */
+    public ProjectTemplateResponseDTO getTemplateById(Long templateId) {
+        MDC.put("operation", "get_template");
+        MDC.put("templateId", String.valueOf(templateId));
+
+        try {
+            log.info("开始查询项目模板详情，模板ID: {}", templateId);
+
+            // 权限验证：需要管理员权限
+            securityUtils.requireAdmin();
+
+            // 查询模板
+            Project template = projectMapper.selectById(templateId);
+            if (template == null) {
+                log.warn("项目模板不存在，模板ID: {}", templateId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND, "项目模板不存在");
+            }
+
+            // 验证是否为模板
+            if (!ProjectStatus.TEMPLATE.getCode().equals(template.getStatus())) {
+                log.warn("项目不是模板，项目ID: {}, 状态: {}", templateId, template.getStatus());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目不是模板");
+            }
+
+            log.info("项目模板详情查询成功，模板ID: {}", templateId);
+
+            return toProjectTemplateResponseDTO(template);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目模板详情查询失败，模板ID: {}", templateId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目模板详情查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 更新项目模板
+     *
+     * @param templateId 模板ID
+     * @param requestDTO 更新模板请求
+     * @return 模板详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectTemplateResponseDTO updateTemplate(Long templateId, ProjectTemplateUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_template");
+        MDC.put("templateId", String.valueOf(templateId));
+
+        try {
+            log.info("开始更新项目模板，模板ID: {}", templateId);
+
+            // 权限验证：需要管理员权限
+            securityUtils.requireAdmin();
+
+            // 查询模板
+            Project template = projectMapper.selectById(templateId);
+            if (template == null) {
+                log.warn("项目模板不存在，模板ID: {}", templateId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND, "项目模板不存在");
+            }
+
+            // 验证是否为模板
+            if (!ProjectStatus.TEMPLATE.getCode().equals(template.getStatus())) {
+                log.warn("项目不是模板，项目ID: {}, 状态: {}", templateId, template.getStatus());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目不是模板");
+            }
+
+            // 验证模板名称唯一性（排除当前模板）
+            if (requestDTO.getName() != null && !requestDTO.getName().trim().isEmpty()
+                    && !requestDTO.getName().equals(template.getName())) {
+                LambdaQueryWrapper<Project> nameQuery = new LambdaQueryWrapper<>();
+                nameQuery.eq(Project::getName, requestDTO.getName().trim())
+                        .ne(Project::getId, templateId);
+                Project existingTemplate = projectMapper.selectOne(nameQuery);
+                if (existingTemplate != null) {
+                    log.warn("模板名称已存在: {}", requestDTO.getName());
+                    throw new BusinessException(ResultCode.PROJECT_NAME_EXISTS, "模板名称已存在");
+                }
+                template.setName(requestDTO.getName().trim());
+            }
+
+            // 更新描述
+            if (requestDTO.getDescription() != null) {
+                template.setDescription(requestDTO.getDescription());
+            }
+
+            // 更新更新时间
+            template.setUpdatedOn(new Date());
+
+            // 保存模板
+            projectMapper.updateById(template);
+            log.debug("模板信息更新成功，模板ID: {}", templateId);
+
+            // 更新启用的模块（如果提供了模块列表）
+            if (requestDTO.getEnabledModules() != null) {
+                // 验证模块名称有效性
+                for (String moduleName : requestDTO.getEnabledModules()) {
+                    if (!ProjectModule.isValidCode(moduleName)) {
+                        log.warn("无效的模块名称: {}", moduleName);
+                        throw new BusinessException(ResultCode.PROJECT_MODULE_INVALID, "无效的模块名称: " + moduleName);
+                    }
+                }
+
+                // 删除旧的模块
+                LambdaQueryWrapper<EnabledModule> moduleQuery = new LambdaQueryWrapper<>();
+                moduleQuery.eq(EnabledModule::getProjectId, templateId);
+                enabledModuleMapper.delete(moduleQuery);
+                log.debug("模板旧模块删除成功，模板ID: {}", templateId);
+
+                // 添加新的模块
+                if (!requestDTO.getEnabledModules().isEmpty()) {
+                    for (String moduleName : requestDTO.getEnabledModules()) {
+                        EnabledModule enabledModule = new EnabledModule();
+                        enabledModule.setProjectId(templateId);
+                        enabledModule.setName(moduleName);
+                        enabledModuleMapper.insert(enabledModule);
+                    }
+                    log.debug("模板模块更新成功，模板ID: {}, 模块数量: {}", templateId, requestDTO.getEnabledModules().size());
+                }
+            }
+
+            // 更新跟踪器关联（如果提供了跟踪器列表）
+            if (requestDTO.getTrackerIds() != null) {
+                // 验证跟踪器是否存在
+                if (!requestDTO.getTrackerIds().isEmpty()) {
+                    for (Long trackerId : requestDTO.getTrackerIds()) {
+                        Tracker tracker = trackerMapper.selectById(trackerId);
+                        if (tracker == null) {
+                            log.warn("跟踪器不存在，跟踪器ID: {}", trackerId);
+                            throw new BusinessException(ResultCode.TRACKER_NOT_FOUND, "跟踪器不存在，ID: " + trackerId);
+                        }
+                    }
+                }
+
+                // 删除旧的跟踪器关联
+                LambdaQueryWrapper<ProjectTracker> trackerQuery = new LambdaQueryWrapper<>();
+                trackerQuery.eq(ProjectTracker::getProjectId, templateId);
+                projectTrackerMapper.delete(trackerQuery);
+                log.debug("模板旧跟踪器关联删除成功，模板ID: {}", templateId);
+
+                // 添加新的跟踪器关联
+                if (!requestDTO.getTrackerIds().isEmpty()) {
+                    for (Long trackerId : requestDTO.getTrackerIds()) {
+                        ProjectTracker projectTracker = new ProjectTracker();
+                        projectTracker.setProjectId(templateId);
+                        projectTracker.setTrackerId(trackerId);
+                        projectTrackerMapper.insert(projectTracker);
+                    }
+                    log.debug("模板跟踪器关联更新成功，模板ID: {}, 跟踪器数量: {}", templateId, requestDTO.getTrackerIds().size());
+                }
+            }
+
+            // 更新默认角色关联（如果提供了角色列表）
+            if (requestDTO.getDefaultRoles() != null) {
+                // 验证角色是否存在
+                if (!requestDTO.getDefaultRoles().isEmpty()) {
+                    for (Integer roleId : requestDTO.getDefaultRoles()) {
+                        Role role = roleMapper.selectById(roleId);
+                        if (role == null) {
+                            log.warn("角色不存在，角色ID: {}", roleId);
+                            throw new BusinessException(ResultCode.ROLE_NOT_FOUND, "角色不存在，ID: " + roleId);
+                        }
+                    }
+                }
+
+                // 删除旧的默认角色关联
+                LambdaQueryWrapper<ProjectTemplateRole> templateRoleQuery = new LambdaQueryWrapper<>();
+                templateRoleQuery.eq(ProjectTemplateRole::getProjectId, templateId);
+                projectTemplateRoleMapper.delete(templateRoleQuery);
+                log.debug("模板旧默认角色关联删除成功，模板ID: {}", templateId);
+
+                // 添加新的默认角色关联
+                if (!requestDTO.getDefaultRoles().isEmpty()) {
+                    for (Integer roleId : requestDTO.getDefaultRoles()) {
+                        ProjectTemplateRole templateRole = new ProjectTemplateRole();
+                        templateRole.setProjectId(templateId);
+                        templateRole.setRoleId(roleId);
+                        projectTemplateRoleMapper.insert(templateRole);
+                    }
+                    log.debug("模板默认角色关联更新成功，模板ID: {}, 角色数量: {}", templateId, requestDTO.getDefaultRoles().size());
+                }
+            }
+
+            log.info("项目模板更新成功，模板ID: {}", templateId);
+
+            // 返回模板详情
+            return toProjectTemplateResponseDTO(template);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目模板更新失败，模板ID: {}", templateId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目模板更新失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 从模板创建项目
+     *
+     * @param templateId 模板ID
+     * @param requestDTO 创建项目请求
+     * @return 项目详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectDetailResponseDTO createProjectFromTemplate(Long templateId,
+            ProjectFromTemplateRequestDTO requestDTO) {
+        MDC.put("operation", "create_project_from_template");
+        MDC.put("templateId", String.valueOf(templateId));
+
+        try {
+            log.info("开始从模板创建项目，模板ID: {}, 项目名称: {}", templateId, requestDTO.getName());
+
+            // 权限验证：需要 create_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // TODO: 检查 create_projects 权限
+                log.warn("用户无权限创建项目，用户ID: {}", currentUser.getId());
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限创建项目");
+            }
+
+            // 查询模板
+            Project template = projectMapper.selectById(templateId);
+            if (template == null) {
+                log.warn("项目模板不存在，模板ID: {}", templateId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND, "项目模板不存在");
+            }
+
+            // 验证是否为模板
+            if (!ProjectStatus.TEMPLATE.getCode().equals(template.getStatus())) {
+                log.warn("项目不是模板，项目ID: {}, 状态: {}", templateId, template.getStatus());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目不是模板");
+            }
+
+            // 验证项目名称
+            if (requestDTO.getName() == null || requestDTO.getName().trim().isEmpty()) {
+                log.warn("项目名称不能为空");
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目名称不能为空");
+            }
+
+            // 验证项目标识符唯一性
+            if (requestDTO.getIdentifier() != null && !requestDTO.getIdentifier().trim().isEmpty()) {
+                LambdaQueryWrapper<Project> identifierQuery = new LambdaQueryWrapper<>();
+                identifierQuery.eq(Project::getIdentifier, requestDTO.getIdentifier().trim())
+                        .ne(Project::getStatus, ProjectStatus.TEMPLATE.getCode()); // 排除模板
+                Project existingProject = projectMapper.selectOne(identifierQuery);
+                if (existingProject != null) {
+                    log.warn("项目标识符已存在: {}", requestDTO.getIdentifier());
+                    throw new BusinessException(ResultCode.PROJECT_IDENTIFIER_EXISTS, "项目标识符已存在");
+                }
+            }
+
+            // 使用 copyProject 方法从模板创建项目
+            ProjectCopyRequestDTO copyRequest = new ProjectCopyRequestDTO();
+            copyRequest.setName(requestDTO.getName());
+            copyRequest.setIdentifier(requestDTO.getIdentifier());
+            copyRequest.setCopyMembers(requestDTO.getCopyMembers() != null ? requestDTO.getCopyMembers() : false);
+            copyRequest.setCopyModules(true);
+            copyRequest.setCopyTrackers(true);
+
+            ProjectDetailResponseDTO newProject = copyProject(templateId, copyRequest);
+
+            // 如果模板有默认角色，自动分配给项目创建者
+            if (newProject != null) {
+                LambdaQueryWrapper<ProjectTemplateRole> templateRoleQuery = new LambdaQueryWrapper<>();
+                templateRoleQuery.eq(ProjectTemplateRole::getProjectId, templateId);
+                List<ProjectTemplateRole> templateRoles = projectTemplateRoleMapper.selectList(templateRoleQuery);
+
+                if (!templateRoles.isEmpty()) {
+                    Long newProjectId = newProject.getId();
+                    Long currentUserId = currentUser.getId();
+
+                    // 查询新项目的成员（创建者）
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getProjectId, newProjectId)
+                            .eq(Member::getUserId, currentUserId);
+                    Member member = memberMapper.selectOne(memberQuery);
+
+                    if (member != null) {
+                        // 分配默认角色给创建者
+                        for (ProjectTemplateRole templateRole : templateRoles) {
+                            MemberRole memberRole = new MemberRole();
+                            memberRole.setMemberId(member.getId().intValue());
+                            memberRole.setRoleId(templateRole.getRoleId());
+                            memberRoleMapper.insert(memberRole);
+                        }
+                        log.debug("默认角色分配成功，项目ID: {}, 用户ID: {}, 角色数量: {}",
+                                newProjectId, currentUserId, templateRoles.size());
+                    }
+                }
+            }
+
+            log.info("从模板创建项目成功，模板ID: {}, 新项目ID: {}", templateId, newProject != null ? newProject.getId() : null);
+
+            return newProject;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("从模板创建项目失败，模板ID: {}", templateId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "从模板创建项目失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 删除项目模板
+     *
+     * @param templateId 模板ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteTemplate(Long templateId) {
+        MDC.put("operation", "delete_template");
+        MDC.put("templateId", String.valueOf(templateId));
+
+        try {
+            log.info("开始删除项目模板，模板ID: {}", templateId);
+
+            // 权限验证：需要管理员权限
+            securityUtils.requireAdmin();
+
+            // 查询模板
+            Project template = projectMapper.selectById(templateId);
+            if (template == null) {
+                log.warn("项目模板不存在，模板ID: {}", templateId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND, "项目模板不存在");
+            }
+
+            // 验证是否为模板
+            if (!ProjectStatus.TEMPLATE.getCode().equals(template.getStatus())) {
+                log.warn("项目不是模板，项目ID: {}, 状态: {}", templateId, template.getStatus());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目不是模板");
+            }
+
+            // 删除模板的默认角色关联
+            LambdaQueryWrapper<ProjectTemplateRole> templateRoleQuery = new LambdaQueryWrapper<>();
+            templateRoleQuery.eq(ProjectTemplateRole::getProjectId, templateId);
+            projectTemplateRoleMapper.delete(templateRoleQuery);
+            log.debug("模板默认角色关联删除成功，模板ID: {}", templateId);
+
+            // 删除模板的跟踪器关联
+            LambdaQueryWrapper<ProjectTracker> trackerQuery = new LambdaQueryWrapper<>();
+            trackerQuery.eq(ProjectTracker::getProjectId, templateId);
+            projectTrackerMapper.delete(trackerQuery);
+            log.debug("模板跟踪器关联删除成功，模板ID: {}", templateId);
+
+            // 删除模板的模块
+            LambdaQueryWrapper<EnabledModule> moduleQuery = new LambdaQueryWrapper<>();
+            moduleQuery.eq(EnabledModule::getProjectId, templateId);
+            enabledModuleMapper.delete(moduleQuery);
+            log.debug("模板模块删除成功，模板ID: {}", templateId);
+
+            // 删除模板的成员（如果有）
+            LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+            memberQuery.eq(Member::getProjectId, templateId);
+            List<Member> members = memberMapper.selectList(memberQuery);
+            if (!members.isEmpty()) {
+                for (Member member : members) {
+                    // 删除成员的角色
+                    LambdaQueryWrapper<MemberRole> memberRoleQuery = new LambdaQueryWrapper<>();
+                    memberRoleQuery.eq(MemberRole::getMemberId, member.getId().intValue());
+                    memberRoleMapper.delete(memberRoleQuery);
+                }
+                memberMapper.delete(memberQuery);
+                log.debug("模板成员删除成功，模板ID: {}, 成员数量: {}", templateId, members.size());
+            }
+
+            // 删除模板
+            projectMapper.deleteById(templateId);
+            log.info("项目模板删除成功，模板ID: {}", templateId);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("项目模板删除失败，模板ID: {}", templateId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目模板删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 将 Project 实体转换为 ProjectTemplateResponseDTO
+     *
+     * @param template 模板项目实体
+     * @return 模板响应DTO
+     */
+    private ProjectTemplateResponseDTO toProjectTemplateResponseDTO(Project template) {
+        ProjectTemplateResponseDTO dto = new ProjectTemplateResponseDTO();
+        dto.setId(template.getId());
+        dto.setName(template.getName());
+        dto.setDescription(template.getDescription());
+        dto.setCreatedOn(template.getCreatedOn());
+        dto.setUpdatedOn(template.getUpdatedOn());
+
+        // 查询启用的模块
+        LambdaQueryWrapper<EnabledModule> moduleQuery = new LambdaQueryWrapper<>();
+        moduleQuery.eq(EnabledModule::getProjectId, template.getId());
+        List<EnabledModule> enabledModules = enabledModuleMapper.selectList(moduleQuery);
+        dto.setEnabledModules(enabledModules.stream()
+                .map(EnabledModule::getName)
+                .collect(Collectors.toList()));
+
+        // 查询跟踪器ID列表
+        LambdaQueryWrapper<ProjectTracker> trackerQuery = new LambdaQueryWrapper<>();
+        trackerQuery.eq(ProjectTracker::getProjectId, template.getId());
+        List<ProjectTracker> projectTrackers = projectTrackerMapper.selectList(trackerQuery);
+        dto.setTrackerIds(projectTrackers.stream()
+                .map(ProjectTracker::getTrackerId)
+                .collect(Collectors.toList()));
+
+        // 查询默认角色ID列表
+        LambdaQueryWrapper<ProjectTemplateRole> templateRoleQuery = new LambdaQueryWrapper<>();
+        templateRoleQuery.eq(ProjectTemplateRole::getProjectId, template.getId());
+        List<ProjectTemplateRole> templateRoles = projectTemplateRoleMapper.selectList(templateRoleQuery);
+        dto.setDefaultRoles(templateRoles.stream()
+                .map(ProjectTemplateRole::getRoleId)
+                .collect(Collectors.toList()));
+
+        return dto;
     }
 }

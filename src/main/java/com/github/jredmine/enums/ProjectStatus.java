@@ -11,35 +11,41 @@ public enum ProjectStatus {
      * 项目正常进行中
      */
     ACTIVE(1, "活跃"),
-    
+
     /**
      * 关闭状态
      * 项目已关闭，但数据保留
      */
     CLOSED(5, "关闭"),
-    
+
     /**
      * 归档状态
      * 项目已归档，通常不显示在列表中
      */
-    ARCHIVED(9, "归档");
-    
+    ARCHIVED(9, "归档"),
+
+    /**
+     * 模板状态
+     * 项目模板，用于快速创建新项目
+     */
+    TEMPLATE(10, "模板");
+
     private final Integer code;
     private final String description;
-    
+
     ProjectStatus(Integer code, String description) {
         this.code = code;
         this.description = description;
     }
-    
+
     public Integer getCode() {
         return code;
     }
-    
+
     public String getDescription() {
         return description;
     }
-    
+
     /**
      * 根据代码获取状态
      *
@@ -57,7 +63,7 @@ public enum ProjectStatus {
         }
         return null;
     }
-    
+
     /**
      * 检查代码是否有效
      *
@@ -68,4 +74,3 @@ public enum ProjectStatus {
         return fromCode(code) != null;
     }
 }
-
