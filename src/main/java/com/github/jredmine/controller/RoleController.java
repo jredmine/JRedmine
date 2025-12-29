@@ -9,11 +9,11 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.role.RoleDetailResponseDTO;
 import com.github.jredmine.dto.response.role.RoleListItemResponseDTO;
 import com.github.jredmine.service.RoleService;
-import com.github.jredmine.util.SecurityUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -38,11 +38,9 @@ import java.util.List;
 public class RoleController {
 
     private final RoleService roleService;
-    private final SecurityUtils securityUtils;
 
-    public RoleController(RoleService roleService, SecurityUtils securityUtils) {
+    public RoleController(RoleService roleService) {
         this.roleService = roleService;
-        this.securityUtils = securityUtils;
     }
 
     @Operation(
@@ -79,11 +77,10 @@ public class RoleController {
             description = "创建新角色（仅支持自定义角色，不能创建内置角色）。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping
     public ApiResponse<RoleDetailResponseDTO> createRole(
             @Valid @RequestBody RoleCreateRequestDTO roleCreateRequestDTO) {
-        // 仅管理员可创建角色
-        securityUtils.requireAdmin();
         RoleDetailResponseDTO response = roleService.createRole(roleCreateRequestDTO);
         return ApiResponse.success("角色创建成功", response);
     }
@@ -93,12 +90,11 @@ public class RoleController {
             description = "更新角色信息。内置角色只能更新部分字段（如permissions），不能修改name、builtin等。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{id}")
     public ApiResponse<RoleDetailResponseDTO> updateRole(
             @PathVariable Integer id,
             @Valid @RequestBody RoleUpdateRequestDTO roleUpdateRequestDTO) {
-        // 仅管理员可更新角色
-        securityUtils.requireAdmin();
         RoleDetailResponseDTO response = roleService.updateRole(id, roleUpdateRequestDTO);
         return ApiResponse.success("角色更新成功", response);
     }
@@ -108,12 +104,11 @@ public class RoleController {
             description = "复制现有角色创建新角色，复制角色的所有配置（权限、可见性等），仅修改角色名称。新角色为自定义角色。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/{id}/copy")
     public ApiResponse<RoleDetailResponseDTO> copyRole(
             @PathVariable Integer id,
             @Valid @RequestBody RoleCopyRequestDTO roleCopyRequestDTO) {
-        // 仅管理员可复制角色
-        securityUtils.requireAdmin();
         RoleDetailResponseDTO response = roleService.copyRole(id, roleCopyRequestDTO);
         return ApiResponse.success("角色复制成功", response);
     }
@@ -123,10 +118,9 @@ public class RoleController {
             description = "删除角色（仅支持自定义角色）。如果角色正在被项目成员使用，将返回错误。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deleteRole(@PathVariable Integer id) {
-        // 仅管理员可删除角色
-        securityUtils.requireAdmin();
         roleService.deleteRole(id);
         return ApiResponse.success("角色删除成功", null);
     }
@@ -148,12 +142,11 @@ public class RoleController {
             description = "批量设置角色可以管理的其他角色列表。如果角色设置了 all_roles_managed=true，此设置将被忽略。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{id}/managed-roles")
     public ApiResponse<Void> updateManagedRoles(
             @PathVariable Integer id,
             @Valid @RequestBody RoleManagedRolesRequestDTO requestDTO) {
-        // 仅管理员可更新角色管理关系
-        securityUtils.requireAdmin();
         roleService.updateManagedRoles(id, requestDTO.getManagedRoleIds());
         return ApiResponse.success("角色管理关系更新成功", null);
     }
@@ -163,12 +156,11 @@ public class RoleController {
             description = "为角色添加一个可管理的角色。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/{id}/managed-roles/{managedRoleId}")
     public ApiResponse<Void> addManagedRole(
             @PathVariable Integer id,
             @PathVariable Integer managedRoleId) {
-        // 仅管理员可添加角色管理关系
-        securityUtils.requireAdmin();
         roleService.addManagedRole(id, managedRoleId);
         return ApiResponse.success("角色管理关系添加成功", null);
     }
@@ -178,12 +170,11 @@ public class RoleController {
             description = "移除角色的一个管理关系。仅管理员可访问",
             security = @SecurityRequirement(name = "bearerAuth")
     )
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{id}/managed-roles/{managedRoleId}")
     public ApiResponse<Void> removeManagedRole(
             @PathVariable Integer id,
             @PathVariable Integer managedRoleId) {
-        // 仅管理员可删除角色管理关系
-        securityUtils.requireAdmin();
         roleService.removeManagedRole(id, managedRoleId);
         return ApiResponse.success("角色管理关系删除成功", null);
     }

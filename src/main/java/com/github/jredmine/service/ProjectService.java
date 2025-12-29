@@ -46,6 +46,7 @@ import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.MemberRoleMapper;
 import com.github.jredmine.mapper.user.RoleMapper;
 import com.github.jredmine.mapper.user.UserMapper;
+import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -80,6 +81,7 @@ public class ProjectService {
     private final RoleMapper roleMapper;
     private final MemberRoleMapper memberRoleMapper;
     private final SecurityUtils securityUtils;
+    private final ProjectPermissionService projectPermissionService;
 
     /**
      * 分页查询项目列表
@@ -265,12 +267,18 @@ public class ProjectService {
         try {
             log.info("开始创建项目，项目名称: {}", requestDTO.getName());
 
-            // 权限验证：需要管理员权限（后续可以扩展为检查 create_projects 权限）
-            securityUtils.requireAdmin();
-
-            // 获取当前用户
+            // 权限验证：需要 create_projects 权限或系统管理员
             User currentUser = securityUtils.getCurrentUser();
             Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // 检查用户是否在任何项目中拥有 create_projects 权限
+                Set<String> allPermissions = projectPermissionService.getUserAllPermissions(currentUserId);
+                if (!allPermissions.contains("create_projects")) {
+                    log.warn("用户无权限创建项目，用户ID: {}", currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限创建项目，需要 create_projects 权限");
+                }
+            }
 
             // 验证项目名称唯一性
             LambdaQueryWrapper<Project> nameQuery = new LambdaQueryWrapper<>();
@@ -404,14 +412,21 @@ public class ProjectService {
         try {
             log.info("开始更新项目，项目ID: {}", id);
 
-            // 权限验证：需要管理员权限（后续可以扩展为检查 edit_projects 权限）
-            securityUtils.requireAdmin();
-
             // 查询项目是否存在
             Project project = projectMapper.selectById(id);
             if (project == null) {
                 log.warn("项目不存在，项目ID: {}", id);
                 throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 权限验证：需要 edit_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUser.getId(), id, "edit_projects")) {
+                    log.warn("用户无权限更新项目，项目ID: {}, 用户ID: {}", id, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新项目，需要 edit_projects 权限");
+                }
             }
 
             // 验证项目名称唯一性（排除当前项目）
@@ -572,14 +587,21 @@ public class ProjectService {
         try {
             log.info("开始删除项目，项目ID: {}", id);
 
-            // 权限验证：需要管理员权限（后续可以扩展为检查 delete_projects 权限）
-            securityUtils.requireAdmin();
-
             // 查询项目是否存在
             Project project = projectMapper.selectById(id);
             if (project == null) {
                 log.warn("项目不存在，项目ID: {}", id);
                 throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 权限验证：需要 delete_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUser.getId(), id, "delete_projects")) {
+                    log.warn("用户无权限删除项目，项目ID: {}, 用户ID: {}", id, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除项目，需要 delete_projects 权限");
+                }
             }
 
             // 检查项目是否已经是归档状态
@@ -635,10 +657,12 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查用户是否有 create_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限复制项目，源项目ID: {}, 用户ID: {}", sourceProjectId, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限复制项目");
+                // 检查用户是否在任何项目中拥有 create_projects 权限
+                Set<String> allPermissions = projectPermissionService.getUserAllPermissions(currentUser.getId());
+                if (!allPermissions.contains("create_projects")) {
+                    log.warn("用户无权限复制项目，源项目ID: {}, 用户ID: {}", sourceProjectId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限复制项目，需要 create_projects 权限");
+                }
             }
 
             // 验证源项目是否存在
@@ -806,21 +830,21 @@ public class ProjectService {
         try {
             log.debug("开始{}项目，项目ID: {}", requestDTO.getArchived() ? "归档" : "取消归档", id);
 
-            // 权限验证：需要 delete_projects 权限或系统管理员
-            User currentUser = securityUtils.getCurrentUser();
-            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
-            if (!isAdmin) {
-                // TODO: 检查用户是否有 delete_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限归档项目，项目ID: {}, 用户ID: {}", id, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限归档项目");
-            }
-
             // 查询项目是否存在
             Project project = projectMapper.selectById(id);
             if (project == null) {
                 log.warn("项目不存在，项目ID: {}", id);
                 throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 权限验证：需要 delete_projects 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUser.getId(), id, "delete_projects")) {
+                    log.warn("用户无权限归档项目，项目ID: {}, 用户ID: {}", id, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限归档项目，需要 delete_projects 权限");
+                }
             }
 
             // 如果是要归档项目
@@ -1127,10 +1151,10 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查用户是否有 manage_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限添加项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限添加项目成员");
+                if (!projectPermissionService.hasPermission(currentUser.getId(), projectId, "manage_projects")) {
+                    log.warn("用户无权限添加项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限添加项目成员，需要 manage_projects 权限");
+                }
             }
 
             // 验证用户是否存在
@@ -1270,10 +1294,10 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查用户是否有 manage_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限更新项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新项目成员");
+                if (!projectPermissionService.hasPermission(currentUser.getId(), projectId, "manage_projects")) {
+                    log.warn("用户无权限更新项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新项目成员，需要 manage_projects 权限");
+                }
             }
 
             // 验证成员是否存在且属于该项目
@@ -1413,10 +1437,10 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查用户是否有 manage_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限移除项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限移除项目成员");
+                if (!projectPermissionService.hasPermission(currentUser.getId(), projectId, "manage_projects")) {
+                    log.warn("用户无权限移除项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限移除项目成员，需要 manage_projects 权限");
+                }
             }
 
             // 验证成员是否存在且属于该项目
@@ -1480,10 +1504,10 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查用户是否有 manage_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限分配角色给项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限分配角色给项目成员");
+                if (!projectPermissionService.hasPermission(currentUser.getId(), projectId, "manage_projects")) {
+                    log.warn("用户无权限分配角色给项目成员，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限分配角色给项目成员，需要 manage_projects 权限");
+                }
             }
 
             // 验证成员是否存在且属于该项目
@@ -1584,10 +1608,10 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查用户是否有 manage_projects 权限
-                // 这里暂时只允许管理员操作，后续可以添加权限检查
-                log.warn("用户无权限更新项目成员角色，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
-                throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新项目成员角色");
+                if (!projectPermissionService.hasPermission(currentUser.getId(), projectId, "manage_projects")) {
+                    log.warn("用户无权限更新项目成员角色，项目ID: {}, 用户ID: {}", projectId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新项目成员角色，需要 manage_projects 权限");
+                }
             }
 
             // 验证成员是否存在且属于该项目
@@ -2451,7 +2475,12 @@ public class ProjectService {
             User currentUser = securityUtils.getCurrentUser();
             boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
             if (!isAdmin) {
-                // TODO: 检查 create_projects 权限
+                // 检查用户是否在任何项目中拥有 create_projects 权限
+                Set<String> allPermissions = projectPermissionService.getUserAllPermissions(currentUser.getId());
+                if (!allPermissions.contains("create_projects")) {
+                    log.warn("用户无权限从模板创建项目，模板ID: {}, 用户ID: {}", templateId, currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限从模板创建项目，需要 create_projects 权限");
+                }
                 log.warn("用户无权限创建项目，用户ID: {}", currentUser.getId());
                 throw new BusinessException(ResultCode.FORBIDDEN, "无权限创建项目");
             }

@@ -4,6 +4,7 @@ import com.github.jredmine.entity.User;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.user.UserMapper;
+import com.github.jredmine.security.UserPrincipal;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
@@ -44,6 +45,11 @@ public class SecurityUtils {
      * @throws BusinessException 如果未认证
      */
     public Long getCurrentUserId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof UserPrincipal) {
+            return ((UserPrincipal) authentication.getPrincipal()).getId();
+        }
+        // 兼容旧代码：从数据库查询
         String username = getCurrentUsername();
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(User::getLogin, username);
@@ -62,6 +68,17 @@ public class SecurityUtils {
      * @throws BusinessException 如果未认证或用户不存在
      */
     public User getCurrentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof UserPrincipal) {
+            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            // 从数据库查询完整用户信息（因为 UserPrincipal 可能不包含所有字段）
+            User user = userMapper.selectById(userPrincipal.getId());
+            if (user == null) {
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+            return user;
+        }
+        // 兼容旧代码：从数据库查询
         String username = getCurrentUsername();
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(User::getLogin, username);
@@ -74,12 +91,31 @@ public class SecurityUtils {
     }
 
     /**
+     * 获取当前登录用户主体（包含权限信息）
+     *
+     * @return UserPrincipal
+     * @throws BusinessException 如果未认证
+     */
+    public UserPrincipal getCurrentUserPrincipal() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof UserPrincipal)) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "未认证，请先登录");
+        }
+        return (UserPrincipal) authentication.getPrincipal();
+    }
+
+    /**
      * 检查当前用户是否是管理员
      *
      * @return true 如果是管理员，false 否则
      */
     public boolean isAdmin() {
         try {
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+            if (authentication != null && authentication.getPrincipal() instanceof UserPrincipal) {
+                return ((UserPrincipal) authentication.getPrincipal()).isAdmin();
+            }
+            // 兼容旧代码：从数据库查询
             User user = getCurrentUser();
             return Boolean.TRUE.equals(user.getAdmin());
         } catch (Exception e) {

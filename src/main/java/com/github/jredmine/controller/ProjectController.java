@@ -23,6 +23,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -75,6 +76,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "创建项目", description = "创建新项目。需要认证，需要 create_projects 权限或系统管理员。创建者自动成为项目成员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('create_projects')")
     @PostMapping
     public ApiResponse<ProjectDetailResponseDTO> createProject(
             @Valid @RequestBody ProjectCreateRequestDTO requestDTO) {
@@ -83,6 +85,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "更新项目", description = "更新项目信息。需要认证，需要 edit_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'edit_projects')")
     @PutMapping("/{id}")
     public ApiResponse<ProjectDetailResponseDTO> updateProject(
             @PathVariable Long id,
@@ -92,6 +95,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "删除项目", description = "删除项目（软删除，更新状态为归档）。需要认证，需要 delete_projects 权限或系统管理员。如果项目存在子项目，则不能删除。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'delete_projects')")
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deleteProject(@PathVariable Long id) {
         projectService.deleteProject(id);
@@ -110,6 +114,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "新增项目成员", description = "添加用户到项目（成为项目成员）。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'manage_projects')")
     @PostMapping("/{id}/members")
     public ApiResponse<ProjectMemberResponseDTO> createProjectMember(
             @PathVariable Long id,
@@ -119,6 +124,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "更新项目成员", description = "更新项目成员信息（如邮件通知设置、角色等）。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'manage_projects')")
     @PutMapping("/{id}/members/{memberId}")
     public ApiResponse<ProjectMemberResponseDTO> updateProjectMember(
             @PathVariable Long id,
@@ -129,6 +135,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "移除项目成员", description = "从项目中移除成员。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'manage_projects')")
     @DeleteMapping("/{id}/members/{memberId}")
     public ApiResponse<Void> removeProjectMember(
             @PathVariable Long id,
@@ -138,6 +145,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "分配角色给项目成员", description = "为项目成员分配角色。如果成员已有该角色，则跳过。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'manage_projects')")
     @PostMapping("/{id}/members/{memberId}/roles")
     public ApiResponse<Void> assignRolesToMember(
             @PathVariable Long id,
@@ -148,6 +156,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "更新项目成员角色", description = "更新项目成员的角色（替换现有直接分配的角色，保留继承的角色）。需要认证，需要 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'manage_projects')")
     @PutMapping("/{id}/members/{memberId}/roles")
     public ApiResponse<Void> updateMemberRoles(
             @PathVariable Long id,
@@ -173,6 +182,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "项目归档/取消归档", description = "归档或取消归档项目。归档时，如果项目存在未归档的子项目，则不能归档。需要认证，需要 delete_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasPermission(#id, 'Project', 'delete_projects')")
     @PutMapping("/{id}/archive")
     public ApiResponse<ProjectDetailResponseDTO> archiveProject(
             @PathVariable Long id,
@@ -183,6 +193,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "复制项目", description = "复制项目（包括项目信息、成员、模块、跟踪器等）。需要认证，需要 create_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('create_projects')")
     @PostMapping("/{id}/copy")
     public ApiResponse<ProjectDetailResponseDTO> copyProject(
             @PathVariable Long id,
@@ -199,6 +210,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "创建项目模板", description = "创建项目模板。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/templates")
     public ApiResponse<ProjectTemplateResponseDTO> createTemplate(
             @Valid @RequestBody ProjectTemplateCreateRequestDTO requestDTO) {
@@ -207,6 +219,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "获取项目模板列表", description = "分页查询项目模板列表，支持按名称模糊查询。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/templates")
     public ApiResponse<PageResponse<ProjectTemplateResponseDTO>> listTemplates(
             @RequestParam(value = "current", defaultValue = "1") Integer current,
@@ -217,6 +230,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "获取项目模板详情", description = "根据模板ID查询模板详细信息。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/templates/{id}")
     public ApiResponse<ProjectTemplateResponseDTO> getTemplateById(@PathVariable Long id) {
         ProjectTemplateResponseDTO result = projectService.getTemplateById(id);
@@ -224,6 +238,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "更新项目模板", description = "更新项目模板信息（名称、描述、模块、跟踪器、默认角色等）。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/templates/{id}")
     public ApiResponse<ProjectTemplateResponseDTO> updateTemplate(
             @PathVariable Long id,
@@ -233,6 +248,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "从模板创建项目", description = "从项目模板创建新项目。需要认证，需要 create_projects 权限或系统管理员。如果模板有默认角色，会自动分配给项目创建者。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('create_projects')")
     @PostMapping("/from-template/{templateId}")
     public ApiResponse<ProjectDetailResponseDTO> createProjectFromTemplate(
             @PathVariable Long templateId,
@@ -242,6 +258,7 @@ public class ProjectController {
     }
 
     @Operation(summary = "删除项目模板", description = "删除项目模板。需要认证，系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/templates/{id}")
     public ApiResponse<Void> deleteTemplate(@PathVariable Long id) {
         projectService.deleteTemplate(id);
