@@ -1,0 +1,52 @@
+package com.github.jredmine.controller;
+
+import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
+import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
+import com.github.jredmine.service.IssueService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 任务管理控制器
+ * 负责任务的查询、创建、更新等管理功能
+ *
+ * @author panfeng
+ */
+@Tag(name = "任务管理", description = "任务信息查询、创建、更新等管理接口")
+@RestController
+@RequestMapping("/api/issues")
+public class IssueController {
+
+    private final IssueService issueService;
+
+    public IssueController(IssueService issueService) {
+        this.issueService = issueService;
+    }
+
+    @Operation(summary = "创建任务", description = "创建新任务。需要认证，需要 add_issues 权限或系统管理员。创建者自动设置为当前用户。如果未指定状态，将使用跟踪器的默认状态。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('add_issues')")
+    @PostMapping
+    public ApiResponse<IssueDetailResponseDTO> createIssue(
+            @Valid @RequestBody IssueCreateRequestDTO requestDTO) {
+        IssueDetailResponseDTO result = issueService.createIssue(requestDTO);
+        return ApiResponse.success("任务创建成功", result);
+    }
+
+    @Operation(summary = "获取任务详情", description = "根据任务ID查询任务详细信息。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/{id}")
+    public ApiResponse<IssueDetailResponseDTO> getIssueById(@PathVariable Long id) {
+        IssueDetailResponseDTO result = issueService.getIssueDetailById(id);
+        return ApiResponse.success(result);
+    }
+}
