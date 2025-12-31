@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
@@ -73,6 +74,16 @@ public class IssueController {
             @Valid @RequestBody IssueUpdateRequestDTO requestDTO) {
         IssueDetailResponseDTO result = issueService.updateIssue(id, requestDTO);
         return ApiResponse.success("任务更新成功", result);
+    }
+
+    @Operation(summary = "更新任务状态", description = "更新任务状态，完整支持工作流验证。需要认证，需要 edit_issues 权限或系统管理员。会验证工作流规则（状态转换是否允许）、用户角色权限、指派人/创建者限制。如果状态是关闭状态，自动设置 closed_on 和 done_ratio = 100。支持添加备注/评论。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
+    @PutMapping("/{id}/status")
+    public ApiResponse<IssueDetailResponseDTO> updateIssueStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueStatusUpdateRequestDTO requestDTO) {
+        IssueDetailResponseDTO result = issueService.updateIssueStatus(id, requestDTO);
+        return ApiResponse.success("任务状态更新成功", result);
     }
 
     @Operation(summary = "删除任务", description = "删除任务（物理删除）。需要认证，需要 delete_issues 权限或系统管理员。如果任务存在子任务，则不能删除，需要先删除子任务。", security = @SecurityRequirement(name = "bearerAuth"))

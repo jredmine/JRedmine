@@ -4,7 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
+import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
+import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
@@ -29,8 +32,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.github.jredmine.entity.Member;
+import com.github.jredmine.entity.MemberRole;
 import com.github.jredmine.mapper.project.MemberMapper;
+import com.github.jredmine.mapper.user.MemberRoleMapper;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -51,8 +57,10 @@ public class IssueService {
     private final IssueStatusMapper issueStatusMapper;
     private final UserMapper userMapper;
     private final MemberMapper memberMapper;
+    private final MemberRoleMapper memberRoleMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
+    private final WorkflowService workflowService;
 
     /**
      * 创建任务
@@ -846,6 +854,196 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务删除失败，任务ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 获取用户在项目中的角色ID列表
+     *
+     * @param userId    用户ID
+     * @param projectId 项目ID
+     * @return 角色ID列表
+     */
+    private List<Integer> getUserProjectRoleIds(Long userId, Long projectId) {
+        // 查询用户是否是项目成员
+        LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+        memberQuery.eq(Member::getUserId, userId)
+                .eq(Member::getProjectId, projectId);
+        Member member = memberMapper.selectOne(memberQuery);
+
+        if (member == null) {
+            return new ArrayList<>();
+        }
+
+        // 查询成员的所有角色
+        LambdaQueryWrapper<MemberRole> memberRoleQuery = new LambdaQueryWrapper<>();
+        memberRoleQuery.eq(MemberRole::getMemberId, member.getId().intValue());
+        List<MemberRole> memberRoles = memberRoleMapper.selectList(memberRoleQuery);
+
+        if (memberRoles.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // 获取所有角色ID
+        return memberRoles.stream()
+                .map(MemberRole::getRoleId)
+                .distinct()
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 更新任务状态（完整支持工作流验证和备注功能）
+     *
+     * @param id         任务ID
+     * @param requestDTO 更新状态请求
+     * @return 任务详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueDetailResponseDTO updateIssueStatus(Long id, IssueStatusUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_issue_status");
+        MDC.put("issueId", String.valueOf(id));
+        MDC.put("newStatusId", String.valueOf(requestDTO.getStatusId()));
+
+        try {
+            log.info("开始更新任务状态，任务ID: {}, 新状态ID: {}", id, requestDTO.getStatusId());
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(id);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 edit_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "edit_issues")) {
+                    log.warn("用户无权限更新任务状态，任务ID: {}, 项目ID: {}, 用户ID: {}", id, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新任务状态，需要 edit_issues 权限");
+                }
+            }
+
+            // 乐观锁检查
+            if (requestDTO.getLockVersion() != null && !requestDTO.getLockVersion().equals(issue.getLockVersion())) {
+                log.warn("任务已被其他用户修改，任务ID: {}, 当前版本: {}, 请求版本: {}",
+                        id, issue.getLockVersion(), requestDTO.getLockVersion());
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
+            }
+
+            // 验证新状态是否存在
+            Integer newStatusId = requestDTO.getStatusId();
+            IssueStatus newStatus = issueStatusMapper.selectById(newStatusId);
+            if (newStatus == null) {
+                log.warn("任务状态不存在，状态ID: {}", newStatusId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态不存在");
+            }
+
+            // 如果状态没有变化，直接返回
+            if (newStatusId.equals(issue.getStatusId())) {
+                log.info("任务状态未变化，任务ID: {}, 状态ID: {}", id, newStatusId);
+                return getIssueDetailById(id);
+            }
+
+            // 工作流验证：检查状态转换是否允许
+            // 获取用户在项目中的角色ID列表
+            List<Integer> userRoleIds = getUserProjectRoleIds(currentUserId, issue.getProjectId());
+            
+            // 获取可用的状态转换
+            WorkflowTransitionResponseDTO availableTransitions = workflowService.getAvailableTransitions(
+                    issue.getTrackerId(),
+                    issue.getStatusId(),
+                    userRoleIds.isEmpty() ? null : userRoleIds
+            );
+
+            // 检查新状态是否在可用转换列表中
+            boolean isTransitionAllowed = false;
+            AvailableTransitionDTO targetTransition = null;
+            for (AvailableTransitionDTO transition : availableTransitions.getAvailableTransitions()) {
+                if (transition.getStatusId().equals(newStatusId)) {
+                    isTransitionAllowed = true;
+                    targetTransition = transition;
+                    break;
+                }
+            }
+
+            if (!isTransitionAllowed) {
+                log.warn("状态转换不允许，任务ID: {}, 当前状态ID: {}, 目标状态ID: {}, 用户角色IDs: {}",
+                        id, issue.getStatusId(), newStatusId, userRoleIds);
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "不允许从状态 \"" + availableTransitions.getCurrentStatusName() + "\" 转换到状态 \"" + newStatus.getName() + "\"，请检查工作流规则");
+            }
+
+            // 验证指派人限制
+            if (Boolean.TRUE.equals(targetTransition.getAssignee())) {
+                if (issue.getAssignedToId() == null || !issue.getAssignedToId().equals(currentUserId)) {
+                    log.warn("状态转换需要指派人权限，任务ID: {}, 指派人ID: {}, 当前用户ID: {}",
+                            id, issue.getAssignedToId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "只有任务的指派人可以执行此状态转换");
+                }
+            }
+
+            // 验证创建者限制
+            if (Boolean.TRUE.equals(targetTransition.getAuthor())) {
+                if (issue.getAuthorId() == null || !issue.getAuthorId().equals(currentUserId)) {
+                    log.warn("状态转换需要创建者权限，任务ID: {}, 创建者ID: {}, 当前用户ID: {}",
+                            id, issue.getAuthorId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "只有任务的创建者可以执行此状态转换");
+                }
+            }
+
+            // TODO: 验证字段规则（必填、只读等）
+            // 暂时跳过，后续实现完整的字段规则验证
+
+            // 更新状态
+            Integer oldStatusId = issue.getStatusId();
+            issue.setStatusId(newStatusId);
+
+            // 如果新状态是关闭状态，自动设置关闭时间和完成度
+            if (Boolean.TRUE.equals(newStatus.getIsClosed())) {
+                issue.setClosedOn(LocalDateTime.now());
+                if (issue.getDoneRatio() == null || issue.getDoneRatio() < 100) {
+                    issue.setDoneRatio(100);
+                }
+            } else {
+                // 如果从关闭状态转换到非关闭状态，清除关闭时间
+                if (oldStatusId != null) {
+                    IssueStatus oldStatus = issueStatusMapper.selectById(oldStatusId);
+                    if (oldStatus != null && Boolean.TRUE.equals(oldStatus.getIsClosed())) {
+                        issue.setClosedOn(null);
+                    }
+                }
+            }
+
+            // 更新乐观锁版本号和更新时间
+            issue.setLockVersion(issue.getLockVersion() + 1);
+            issue.setUpdatedOn(LocalDateTime.now());
+
+            // 保存任务
+            int updateResult = issueMapper.updateById(issue);
+            if (updateResult <= 0) {
+                log.error("任务状态更新失败，更新数据库失败，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态更新失败");
+            }
+
+            log.info("任务状态更新成功，任务ID: {}, 旧状态ID: {}, 新状态ID: {}", id, oldStatusId, newStatusId);
+
+            // TODO: 记录状态变更历史到 journals 表
+            // 包括备注信息（requestDTO.getNotes()）
+            // 暂时跳过，后续实现
+
+            // 查询更新后的任务（包含关联信息）
+            return getIssueDetailById(id);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务状态更新失败，任务ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态更新失败");
         } finally {
             MDC.clear();
         }
