@@ -1,9 +1,13 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.Project;
@@ -24,8 +28,12 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.github.jredmine.entity.Member;
+import com.github.jredmine.mapper.project.MemberMapper;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 任务服务
@@ -42,6 +50,7 @@ public class IssueService {
     private final TrackerMapper trackerMapper;
     private final IssueStatusMapper issueStatusMapper;
     private final UserMapper userMapper;
+    private final MemberMapper memberMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
 
@@ -206,6 +215,268 @@ public class IssueService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * 分页查询任务列表
+     *
+     * @param requestDTO 查询请求参数
+     * @return 分页响应
+     */
+    public PageResponse<IssueListItemResponseDTO> listIssues(IssueListRequestDTO requestDTO) {
+        MDC.put("operation", "list_issues");
+
+        try {
+            // 设置默认值
+            Integer current = requestDTO.getCurrent() != null ? requestDTO.getCurrent() : 1;
+            Integer size = requestDTO.getSize() != null ? requestDTO.getSize() : 10;
+            String sortOrder = requestDTO.getSortOrder() != null ? requestDTO.getSortOrder() : "desc";
+
+            log.debug("开始查询任务列表，页码: {}, 每页数量: {}", current, size);
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            Long currentUserId = currentUser.getId();
+
+            // 获取当前用户是成员的项目ID集合（如果不是管理员）
+            final Set<Long> memberProjectIds;
+            if (!isAdmin) {
+                LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                memberQuery.eq(Member::getUserId, currentUserId);
+                List<Member> members = memberMapper.selectList(memberQuery);
+                memberProjectIds = members.stream()
+                        .map(Member::getProjectId)
+                        .collect(Collectors.toSet());
+            } else {
+                memberProjectIds = null;
+            }
+
+            // 创建分页对象
+            Page<Issue> page = new Page<>(current, size);
+
+            // 构建查询条件
+            LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+
+            // 项目筛选
+            if (requestDTO.getProjectId() != null) {
+                queryWrapper.eq(Issue::getProjectId, requestDTO.getProjectId());
+            }
+
+            // 状态筛选
+            if (requestDTO.getStatusId() != null) {
+                queryWrapper.eq(Issue::getStatusId, requestDTO.getStatusId());
+            }
+
+            // 跟踪器筛选
+            if (requestDTO.getTrackerId() != null) {
+                queryWrapper.eq(Issue::getTrackerId, requestDTO.getTrackerId());
+            }
+
+            // 优先级筛选
+            if (requestDTO.getPriorityId() != null) {
+                queryWrapper.eq(Issue::getPriorityId, requestDTO.getPriorityId());
+            }
+
+            // 指派人筛选
+            if (requestDTO.getAssignedToId() != null) {
+                if (requestDTO.getAssignedToId() == 0) {
+                    // 查询未分配的任务
+                    queryWrapper.isNull(Issue::getAssignedToId);
+                } else {
+                    queryWrapper.eq(Issue::getAssignedToId, requestDTO.getAssignedToId());
+                }
+            }
+
+            // 创建者筛选
+            if (requestDTO.getAuthorId() != null) {
+                queryWrapper.eq(Issue::getAuthorId, requestDTO.getAuthorId());
+            }
+
+            // 分类筛选
+            if (requestDTO.getCategoryId() != null) {
+                if (requestDTO.getCategoryId() == 0) {
+                    // 查询无分类的任务
+                    queryWrapper.isNull(Issue::getCategoryId);
+                } else {
+                    queryWrapper.eq(Issue::getCategoryId, requestDTO.getCategoryId());
+                }
+            }
+
+            // 版本筛选
+            if (requestDTO.getFixedVersionId() != null) {
+                if (requestDTO.getFixedVersionId() == 0) {
+                    // 查询无版本的任务
+                    queryWrapper.isNull(Issue::getFixedVersionId);
+                } else {
+                    queryWrapper.eq(Issue::getFixedVersionId, requestDTO.getFixedVersionId());
+                }
+            }
+
+            // 关键词搜索（在标题和描述中搜索）
+            if (requestDTO.getKeyword() != null && !requestDTO.getKeyword().trim().isEmpty()) {
+                queryWrapper.and(wrapper -> {
+                    wrapper.like(Issue::getSubject, requestDTO.getKeyword().trim())
+                            .or()
+                            .like(Issue::getDescription, requestDTO.getKeyword().trim());
+                });
+            }
+
+            // 是否私有筛选
+            if (requestDTO.getIsPrivate() != null) {
+                queryWrapper.eq(Issue::getIsPrivate, requestDTO.getIsPrivate());
+            }
+
+            // 权限过滤：如果不是管理员，只显示用户有权限查看的任务
+            if (!isAdmin) {
+                final Set<Long> finalMemberProjectIds = memberProjectIds;
+                queryWrapper.and(wrapper -> {
+                    // 私有任务：必须是项目成员
+                    wrapper.and(w -> w.eq(Issue::getIsPrivate, true)
+                                    .in(finalMemberProjectIds != null && !finalMemberProjectIds.isEmpty(),
+                                            Issue::getProjectId, finalMemberProjectIds))
+                            .or()
+                            // 非私有任务：项目成员可见
+                            .and(w -> w.eq(Issue::getIsPrivate, false)
+                                    .in(finalMemberProjectIds != null && !finalMemberProjectIds.isEmpty(),
+                                            Issue::getProjectId, finalMemberProjectIds));
+                });
+            }
+
+            // 排序
+            if (requestDTO.getSortBy() != null && !requestDTO.getSortBy().trim().isEmpty()) {
+                String sortField = requestDTO.getSortBy().trim().toLowerCase();
+                boolean ascending = "asc".equalsIgnoreCase(sortOrder);
+                switch (sortField) {
+                    case "created_on":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getCreatedOn);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getCreatedOn);
+                        }
+                        break;
+                    case "updated_on":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getUpdatedOn);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getUpdatedOn);
+                        }
+                        break;
+                    case "priority":
+                    case "priority_id":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getPriorityId);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getPriorityId);
+                        }
+                        break;
+                    case "due_date":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getDueDate);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getDueDate);
+                        }
+                        break;
+                    default:
+                        // 默认按 ID 倒序
+                        queryWrapper.orderByDesc(Issue::getId);
+                        break;
+                }
+            } else {
+                // 默认按 ID 倒序
+                queryWrapper.orderByDesc(Issue::getId);
+            }
+
+            // 执行分页查询
+            Page<Issue> result = issueMapper.selectPage(page, queryWrapper);
+
+            MDC.put("total", String.valueOf(result.getTotal()));
+            log.info("任务列表查询成功，共查询到 {} 条记录", result.getTotal());
+
+            // 转换为响应 DTO
+            List<IssueListItemResponseDTO> dtoList = result.getRecords().stream()
+                    .map(this::toIssueListItemResponseDTO)
+                    .toList();
+
+            return PageResponse.of(
+                    dtoList,
+                    (int) result.getTotal(),
+                    (int) result.getCurrent(),
+                    (int) result.getSize());
+        } catch (Exception e) {
+            log.error("任务列表查询失败", e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务列表查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 将 Issue 实体转换为 IssueListItemResponseDTO
+     *
+     * @param issue 任务实体
+     * @return 响应 DTO
+     */
+    private IssueListItemResponseDTO toIssueListItemResponseDTO(Issue issue) {
+        IssueListItemResponseDTO dto = new IssueListItemResponseDTO();
+        dto.setId(issue.getId());
+        dto.setTrackerId(issue.getTrackerId());
+        dto.setProjectId(issue.getProjectId());
+        dto.setSubject(issue.getSubject());
+        dto.setStatusId(issue.getStatusId());
+        dto.setPriorityId(issue.getPriorityId());
+        dto.setAssignedToId(issue.getAssignedToId());
+        dto.setAuthorId(issue.getAuthorId());
+        dto.setCreatedOn(issue.getCreatedOn());
+        dto.setUpdatedOn(issue.getUpdatedOn());
+        dto.setDueDate(issue.getDueDate());
+        dto.setDoneRatio(issue.getDoneRatio());
+        dto.setIsPrivate(issue.getIsPrivate());
+
+        // 填充关联信息
+        fillListItemRelatedInfo(dto, issue);
+
+        return dto;
+    }
+
+    /**
+     * 填充列表项关联信息（项目名称、跟踪器名称、状态名称等）
+     */
+    private void fillListItemRelatedInfo(IssueListItemResponseDTO dto, Issue issue) {
+        // 填充项目信息
+        Project project = projectMapper.selectById(issue.getProjectId());
+        if (project != null) {
+            dto.setProjectName(project.getName());
+        }
+
+        // 填充跟踪器信息
+        Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+        if (tracker != null) {
+            dto.setTrackerName(tracker.getName());
+        }
+
+        // 填充状态信息
+        IssueStatus status = issueStatusMapper.selectById(issue.getStatusId());
+        if (status != null) {
+            dto.setStatusName(status.getName());
+        }
+
+        // 填充创建者信息
+        User author = userMapper.selectById(issue.getAuthorId());
+        if (author != null) {
+            dto.setAuthorName(author.getLogin());
+        }
+
+        // 填充指派人信息
+        if (issue.getAssignedToId() != null) {
+            User assignedUser = userMapper.selectById(issue.getAssignedToId());
+            if (assignedUser != null) {
+                dto.setAssignedToName(assignedUser.getLogin());
+            }
+        }
+
+        // TODO: 填充优先级名称
+        // 需要创建相应的实体和 Mapper
     }
 
     /**

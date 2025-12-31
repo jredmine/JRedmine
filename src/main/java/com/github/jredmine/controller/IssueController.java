@@ -1,9 +1,12 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.service.IssueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -33,6 +36,15 @@ public class IssueController {
 
     public IssueController(IssueService issueService) {
         this.issueService = issueService;
+    }
+
+    @Operation(summary = "获取任务列表", description = "分页查询任务列表，支持按项目、状态、跟踪器、优先级、指派人、创建者等条件筛选，支持关键词搜索（标题、描述），支持排序。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping
+    public ApiResponse<PageResponse<IssueListItemResponseDTO>> listIssues(
+            IssueListRequestDTO requestDTO) {
+        PageResponse<IssueListItemResponseDTO> result = issueService.listIssues(requestDTO);
+        return ApiResponse.success(result);
     }
 
     @Operation(summary = "创建任务", description = "创建新任务。需要认证，需要 add_issues 权限或系统管理员。创建者自动设置为当前用户。如果未指定状态，将使用跟踪器的默认状态。", security = @SecurityRequirement(name = "bearerAuth"))
