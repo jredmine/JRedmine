@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.service.IssueService;
@@ -12,6 +13,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -48,5 +50,15 @@ public class IssueController {
     public ApiResponse<IssueDetailResponseDTO> getIssueById(@PathVariable Long id) {
         IssueDetailResponseDTO result = issueService.getIssueDetailById(id);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "更新任务", description = "更新任务信息。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。如果状态改变，需要遵循工作流规则。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
+    @PutMapping("/{id}")
+    public ApiResponse<IssueDetailResponseDTO> updateIssue(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueUpdateRequestDTO requestDTO) {
+        IssueDetailResponseDTO result = issueService.updateIssue(id, requestDTO);
+        return ApiResponse.success("任务更新成功", result);
     }
 }
