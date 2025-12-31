@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -72,5 +73,13 @@ public class IssueController {
             @Valid @RequestBody IssueUpdateRequestDTO requestDTO) {
         IssueDetailResponseDTO result = issueService.updateIssue(id, requestDTO);
         return ApiResponse.success("任务更新成功", result);
+    }
+
+    @Operation(summary = "删除任务", description = "删除任务（物理删除）。需要认证，需要 delete_issues 权限或系统管理员。如果任务存在子任务，则不能删除，需要先删除子任务。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('delete_issues')")
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteIssue(@PathVariable Long id) {
+        issueService.deleteIssue(id);
+        return ApiResponse.success("任务删除成功", null);
     }
 }

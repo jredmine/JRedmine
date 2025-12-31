@@ -784,4 +784,70 @@ public class IssueService {
             MDC.clear();
         }
     }
+
+    /**
+     * 删除任务
+     *
+     * @param id 任务ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteIssue(Long id) {
+        MDC.put("operation", "delete_issue");
+        MDC.put("issueId", String.valueOf(id));
+
+        try {
+            log.info("开始删除任务，任务ID: {}", id);
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(id);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 delete_issues 权限或系统管理员
+            if (!isAdmin) {
+                // 检查用户在项目中是否拥有 delete_issues 权限
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "delete_issues")) {
+                    log.warn("用户无权限删除任务，任务ID: {}, 项目ID: {}, 用户ID: {}", id, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除任务，需要 delete_issues 权限");
+                }
+            }
+
+            // 检查是否有子任务
+            LambdaQueryWrapper<Issue> childrenQuery = new LambdaQueryWrapper<>();
+            childrenQuery.eq(Issue::getParentId, id);
+            Long childrenCount = issueMapper.selectCount(childrenQuery);
+            if (childrenCount > 0) {
+                log.warn("任务存在子任务，不能删除，任务ID: {}, 子任务数量: {}", id, childrenCount);
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "任务存在 " + childrenCount + " 个子任务，请先删除子任务");
+            }
+
+            // TODO: 删除任务关联关系（issue_relations 表）
+            // 暂时跳过，后续实现任务关联功能时再处理
+
+            // 物理删除任务
+            int deleteResult = issueMapper.deleteById(id);
+            if (deleteResult <= 0) {
+                log.error("任务删除失败，删除数据库失败，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务删除失败");
+            }
+
+            log.info("任务删除成功，任务ID: {}, 任务标题: {}", id, issue.getSubject());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务删除失败，任务ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
 }
