@@ -1,5 +1,7 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCopyRequestDTO;
@@ -12,12 +14,14 @@ import com.github.jredmine.dto.request.project.ProjectTemplateUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.issue.IssueCategoryResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
+import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -48,9 +52,11 @@ import java.util.List;
 public class ProjectController {
 
     private final ProjectService projectService;
+    private final IssueService issueService;
 
-    public ProjectController(ProjectService projectService) {
+    public ProjectController(ProjectService projectService, IssueService issueService) {
         this.projectService = projectService;
+        this.issueService = issueService;
     }
 
     @Operation(summary = "获取项目列表", description = "分页查询项目列表，支持按关键词（在名称和描述中搜索）、名称（仅在名称中搜索）、状态、是否公开、父项目等条件筛选。需要认证。公开项目所有用户可见，私有项目仅项目成员可见，系统管理员可见所有项目。", security = @SecurityRequirement(name = "bearerAuth"))
@@ -263,5 +269,26 @@ public class ProjectController {
     public ApiResponse<Void> deleteTemplate(@PathVariable Long id) {
         projectService.deleteTemplate(id);
         return ApiResponse.success("项目模板删除成功", null);
+    }
+
+    @Operation(summary = "创建任务分类", description = "创建项目任务分类。分类是项目级别的，每个项目可以有自己的分类。分类可以设置默认指派人。需要认证，需要 manage_categories 或 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_categories') or hasPermission(#projectId, 'Project', 'manage_projects')")
+    @PostMapping("/{projectId}/issue-categories")
+    public ApiResponse<IssueCategoryResponseDTO> createIssueCategory(
+            @PathVariable Long projectId,
+            @Valid @RequestBody IssueCategoryCreateRequestDTO requestDTO) {
+        IssueCategoryResponseDTO result = issueService.createIssueCategory(projectId, requestDTO);
+        return ApiResponse.success("任务分类创建成功", result);
+    }
+
+    @Operation(summary = "更新任务分类", description = "更新项目任务分类。支持部分更新（只更新提供的字段）。需要认证，需要 manage_categories 或 manage_projects 权限或系统管理员。分类名称在同一项目内必须唯一。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_categories') or hasPermission(#projectId, 'Project', 'manage_projects')")
+    @PutMapping("/{projectId}/issue-categories/{id}")
+    public ApiResponse<IssueCategoryResponseDTO> updateIssueCategory(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody IssueCategoryUpdateRequestDTO requestDTO) {
+        IssueCategoryResponseDTO result = issueService.updateIssueCategory(projectId, id, requestDTO);
+        return ApiResponse.success("任务分类更新成功", result);
     }
 }

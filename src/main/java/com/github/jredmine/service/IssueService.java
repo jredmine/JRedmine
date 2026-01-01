@@ -1,8 +1,11 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
@@ -12,10 +15,12 @@ import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.issue.IssueCategoryResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.entity.Issue;
+import com.github.jredmine.entity.IssueCategory;
 import com.github.jredmine.entity.IssueRelation;
 import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.Project;
@@ -24,6 +29,7 @@ import com.github.jredmine.entity.User;
 import com.github.jredmine.entity.Watcher;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
+import com.github.jredmine.mapper.issue.IssueCategoryMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.issue.IssueRelationMapper;
 import com.github.jredmine.mapper.issue.WatcherMapper;
@@ -61,6 +67,7 @@ public class IssueService {
 
     private final IssueMapper issueMapper;
     private final IssueRelationMapper issueRelationMapper;
+    private final IssueCategoryMapper issueCategoryMapper;
     private final WatcherMapper watcherMapper;
     private final ProjectMapper projectMapper;
     private final TrackerMapper trackerMapper;
@@ -1623,6 +1630,258 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务关注者删除失败，任务ID: {}, 用户ID: {}", issueId, userId, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 创建任务分类
+     *
+     * @param projectId  项目ID
+     * @param requestDTO 创建分类请求
+     * @return 任务分类响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueCategoryResponseDTO createIssueCategory(Long projectId, IssueCategoryCreateRequestDTO requestDTO) {
+        MDC.put("operation", "create_issue_category");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("categoryName", requestDTO.getName());
+
+        try {
+            log.info("开始创建任务分类，项目ID: {}, 分类名称: {}", projectId, requestDTO.getName());
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_categories 权限或系统管理员
+            // 注意：manage_categories 权限可能不在 Permission 枚举中，可以使用 manage_projects 权限
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_categories")) {
+                    // 如果没有 manage_categories 权限，尝试使用 manage_projects 权限
+                    if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_projects")) {
+                        log.warn("用户无权限创建任务分类，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN,
+                                "无权限创建任务分类，需要 manage_categories 或 manage_projects 权限");
+                    }
+                }
+            }
+
+            // 验证分类名称在项目中是否已存在
+            LambdaQueryWrapper<IssueCategory> checkQuery = new LambdaQueryWrapper<>();
+            checkQuery.eq(IssueCategory::getProjectId, projectId.intValue())
+                    .eq(IssueCategory::getName, requestDTO.getName().trim());
+            IssueCategory existingCategory = issueCategoryMapper.selectOne(checkQuery);
+            if (existingCategory != null) {
+                log.warn("任务分类名称已存在，项目ID: {}, 分类名称: {}", projectId, requestDTO.getName());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "该分类名称已存在");
+            }
+
+            // 验证默认指派人是否存在（如果提供且不为0）
+            Long assignedToId = requestDTO.getAssignedToId();
+            if (assignedToId != null && assignedToId != 0) {
+                User assignedUser = userMapper.selectById(assignedToId);
+                if (assignedUser == null) {
+                    log.warn("默认指派人不存在，用户ID: {}", assignedToId);
+                    throw new BusinessException(ResultCode.USER_NOT_FOUND, "默认指派人不存在");
+                }
+            }
+
+            // 创建任务分类
+            IssueCategory category = new IssueCategory();
+            category.setProjectId(projectId.intValue());
+            category.setName(requestDTO.getName().trim());
+            category.setAssignedToId((assignedToId != null && assignedToId != 0) ? assignedToId.intValue() : null);
+
+            int insertResult = issueCategoryMapper.insert(category);
+            if (insertResult <= 0) {
+                log.error("任务分类创建失败，插入数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类创建失败");
+            }
+
+            log.info("任务分类创建成功，分类ID: {}, 分类名称: {}", category.getId(), category.getName());
+
+            // 构建响应 DTO
+            IssueCategoryResponseDTO responseDTO = new IssueCategoryResponseDTO();
+            responseDTO.setId(category.getId());
+            responseDTO.setProjectId(projectId);
+            responseDTO.setName(category.getName());
+            responseDTO.setAssignedToId(
+                    (category.getAssignedToId() != null) ? category.getAssignedToId().longValue() : null);
+
+            // 填充默认指派人名称
+            if (category.getAssignedToId() != null) {
+                User assignedUser = userMapper.selectById(category.getAssignedToId().longValue());
+                if (assignedUser != null) {
+                    responseDTO.setAssignedToName(assignedUser.getLogin());
+                }
+            }
+
+            return responseDTO;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务分类创建失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类创建失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 更新任务分类
+     *
+     * @param projectId  项目ID
+     * @param categoryId 分类ID
+     * @param requestDTO 更新分类请求
+     * @return 任务分类响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueCategoryResponseDTO updateIssueCategory(Long projectId, Integer categoryId,
+            IssueCategoryUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_issue_category");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("categoryId", String.valueOf(categoryId));
+
+        try {
+            log.info("开始更新任务分类，项目ID: {}, 分类ID: {}", projectId, categoryId);
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询分类是否存在
+            IssueCategory category = issueCategoryMapper.selectById(categoryId);
+            if (category == null) {
+                log.warn("任务分类不存在，分类ID: {}", categoryId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类不存在");
+            }
+
+            // 验证分类是否属于该项目
+            if (!category.getProjectId().equals(projectId.intValue())) {
+                log.warn("任务分类不属于该项目，项目ID: {}, 分类ID: {}, 分类所属项目ID: {}",
+                        projectId, categoryId, category.getProjectId());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_categories 权限或系统管理员
+            // 注意：manage_categories 权限可能不在 Permission 枚举中，可以使用 manage_projects 权限
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_categories")) {
+                    // 如果没有 manage_categories 权限，尝试使用 manage_projects 权限
+                    if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_projects")) {
+                        log.warn("用户无权限更新任务分类，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN,
+                                "无权限更新任务分类，需要 manage_categories 或 manage_projects 权限");
+                    }
+                }
+            }
+
+            // 处理分类名称更新（如果提供）
+            boolean needUpdateName = false;
+            String newName = null;
+            if (requestDTO.getName() != null && !requestDTO.getName().trim().isEmpty()) {
+                newName = requestDTO.getName().trim();
+                // 如果名称有变化，验证新名称在项目中是否已存在
+                if (!newName.equals(category.getName())) {
+                    LambdaQueryWrapper<IssueCategory> checkQuery = new LambdaQueryWrapper<>();
+                    checkQuery.eq(IssueCategory::getProjectId, projectId.intValue())
+                            .eq(IssueCategory::getName, newName)
+                            .ne(IssueCategory::getId, categoryId);
+                    IssueCategory existingCategory = issueCategoryMapper.selectOne(checkQuery);
+                    if (existingCategory != null) {
+                        log.warn("任务分类名称已存在，项目ID: {}, 分类名称: {}", projectId, newName);
+                        throw new BusinessException(ResultCode.PARAM_INVALID, "该分类名称已存在");
+                    }
+                }
+                category.setName(newName);
+                needUpdateName = true;
+            }
+
+            // 处理默认指派人更新（如果提供）
+            Long assignedToId = requestDTO.getAssignedToId();
+            boolean needSetAssignedToIdNull = false;
+            if (assignedToId != null) {
+                if (assignedToId == 0) {
+                    // 取消默认指派人，需要显式设置为 null
+                    category.setAssignedToId(null);
+                    needSetAssignedToIdNull = true;
+                } else {
+                    // 验证默认指派人是否存在
+                    User assignedUser = userMapper.selectById(assignedToId);
+                    if (assignedUser == null) {
+                        log.warn("默认指派人不存在，用户ID: {}", assignedToId);
+                        throw new BusinessException(ResultCode.USER_NOT_FOUND, "默认指派人不存在");
+                    }
+                    category.setAssignedToId(assignedToId.intValue());
+                }
+            }
+
+            // 更新分类
+            // 如果需要将 assignedToId 更新为 null，必须使用 LambdaUpdateWrapper 显式设置
+            int updateResult;
+            if (needSetAssignedToIdNull) {
+                // 使用 LambdaUpdateWrapper 显式设置 null 值
+                LambdaUpdateWrapper<IssueCategory> updateWrapper = new LambdaUpdateWrapper<>();
+                updateWrapper.eq(IssueCategory::getId, categoryId);
+                // 更新名称（如果提供）
+                if (needUpdateName) {
+                    updateWrapper.set(IssueCategory::getName, newName);
+                }
+                // 显式设置 assignedToId 为 null
+                updateWrapper.set(IssueCategory::getAssignedToId, null);
+                updateResult = issueCategoryMapper.update(null, updateWrapper);
+            } else {
+                // 正常更新（非 null 值可以直接使用 updateById）
+                updateResult = issueCategoryMapper.updateById(category);
+            }
+
+            if (updateResult <= 0) {
+                log.error("任务分类更新失败，更新数据库失败，分类ID: {}", categoryId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类更新失败");
+            }
+
+            log.info("任务分类更新成功，分类ID: {}, 分类名称: {}", categoryId, category.getName());
+
+            // 构建响应 DTO
+            IssueCategoryResponseDTO responseDTO = new IssueCategoryResponseDTO();
+            responseDTO.setId(category.getId());
+            responseDTO.setProjectId(projectId);
+            responseDTO.setName(category.getName());
+            responseDTO.setAssignedToId(
+                    (category.getAssignedToId() != null) ? category.getAssignedToId().longValue() : null);
+
+            // 填充默认指派人名称
+            if (category.getAssignedToId() != null) {
+                User assignedUser = userMapper.selectById(category.getAssignedToId().longValue());
+                if (assignedUser != null) {
+                    responseDTO.setAssignedToName(assignedUser.getLogin());
+                }
+            }
+
+            return responseDTO;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务分类更新失败，项目ID: {}, 分类ID: {}", projectId, categoryId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类更新失败");
         } finally {
             MDC.clear();
         }
