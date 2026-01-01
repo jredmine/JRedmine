@@ -92,6 +92,16 @@ public class IssueController {
         return ApiResponse.success("任务关联创建成功", result);
     }
 
+    @Operation(summary = "删除任务关联", description = "删除任务关联关系。需要认证，需要 edit_issues 权限或系统管理员。只能删除属于该任务的关联（无论是源任务还是目标任务）。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
+    @DeleteMapping("/{id}/relations/{relationId}")
+    public ApiResponse<Void> deleteIssueRelation(
+            @PathVariable Long id,
+            @PathVariable Integer relationId) {
+        issueService.deleteIssueRelation(id, relationId);
+        return ApiResponse.success("任务关联删除成功", null);
+    }
+
     @Operation(summary = "更新任务", description = "更新任务信息。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。如果状态改变，需要遵循工作流规则。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
     @PutMapping("/{id}")

@@ -1396,4 +1396,75 @@ public class IssueService {
             MDC.clear();
         }
     }
+
+    /**
+     * 删除任务关联
+     *
+     * @param issueId    任务ID
+     * @param relationId 关联ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteIssueRelation(Long issueId, Integer relationId) {
+        MDC.put("operation", "delete_issue_relation");
+        MDC.put("issueId", String.valueOf(issueId));
+        MDC.put("relationId", String.valueOf(relationId));
+
+        try {
+            log.info("开始删除任务关联，任务ID: {}, 关联ID: {}", issueId, relationId);
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 查询关联是否存在
+            IssueRelation relation = issueRelationMapper.selectById(relationId);
+            if (relation == null) {
+                log.warn("任务关联不存在，关联ID: {}", relationId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关联不存在");
+            }
+
+            // 验证关联是否属于该任务（源任务或目标任务）
+            if (!relation.getIssueFromId().equals(issueId.intValue())
+                    && !relation.getIssueToId().equals(issueId.intValue())) {
+                log.warn("任务关联不属于该任务，任务ID: {}, 关联ID: {}, 源任务ID: {}, 目标任务ID: {}",
+                        issueId, relationId, relation.getIssueFromId(), relation.getIssueToId());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "任务关联不属于该任务");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 edit_issues 权限或系统管理员
+            // 检查任务的权限（无论是源任务还是目标任务，都使用当前任务的项目ID）
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "edit_issues")) {
+                    log.warn("用户无权限删除任务关联，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除任务关联，需要 edit_issues 权限");
+                }
+            }
+
+            // 删除关联
+            int deleteResult = issueRelationMapper.deleteById(relationId);
+            if (deleteResult <= 0) {
+                log.error("任务关联删除失败，删除数据库失败，关联ID: {}", relationId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关联删除失败");
+            }
+
+            log.info("任务关联删除成功，任务ID: {}, 关联ID: {}", issueId, relationId);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务关联删除失败，任务ID: {}, 关联ID: {}", issueId, relationId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关联删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
 }
