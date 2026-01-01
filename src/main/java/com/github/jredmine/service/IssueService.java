@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
@@ -12,7 +13,9 @@ import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.entity.Issue;
+import com.github.jredmine.entity.IssueRelation;
 import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.Tracker;
@@ -20,6 +23,7 @@ import com.github.jredmine.entity.User;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.issue.IssueMapper;
+import com.github.jredmine.mapper.issue.IssueRelationMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
@@ -53,6 +57,7 @@ import java.util.stream.Collectors;
 public class IssueService {
 
     private final IssueMapper issueMapper;
+    private final IssueRelationMapper issueRelationMapper;
     private final ProjectMapper projectMapper;
     private final TrackerMapper trackerMapper;
     private final IssueStatusMapper issueStatusMapper;
@@ -115,8 +120,7 @@ public class IssueService {
                             new LambdaQueryWrapper<IssueStatus>()
                                     .orderByAsc(IssueStatus::getPosition)
                                     .orderByAsc(IssueStatus::getId)
-                                    .last("LIMIT 1")
-                    );
+                                    .last("LIMIT 1"));
                     if (statuses.isEmpty()) {
                         log.error("系统中没有可用的任务状态");
                         throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统中没有可用的任务状态");
@@ -346,8 +350,8 @@ public class IssueService {
                 queryWrapper.and(wrapper -> {
                     // 私有任务：必须是项目成员
                     wrapper.and(w -> w.eq(Issue::getIsPrivate, true)
-                                    .in(finalMemberProjectIds != null && !finalMemberProjectIds.isEmpty(),
-                                            Issue::getProjectId, finalMemberProjectIds))
+                            .in(finalMemberProjectIds != null && !finalMemberProjectIds.isEmpty(),
+                                    Issue::getProjectId, finalMemberProjectIds))
                             .or()
                             // 非私有任务：项目成员可见
                             .and(w -> w.eq(Issue::getIsPrivate, false)
@@ -640,7 +644,7 @@ public class IssueService {
 
             // 乐观锁检查
             if (requestDTO.getLockVersion() != null && !requestDTO.getLockVersion().equals(issue.getLockVersion())) {
-                log.warn("任务已被其他用户修改，任务ID: {}, 当前版本: {}, 请求版本: {}", 
+                log.warn("任务已被其他用户修改，任务ID: {}, 当前版本: {}, 请求版本: {}",
                         id, issue.getLockVersion(), requestDTO.getLockVersion());
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
             }
@@ -648,7 +652,7 @@ public class IssueService {
             // 处理状态更新（如果提供）
             if (requestDTO.getStatusId() != null && !requestDTO.getStatusId().equals(issue.getStatusId())) {
                 Integer newStatusId = requestDTO.getStatusId();
-                
+
                 // 验证新状态是否存在
                 IssueStatus newStatus = issueStatusMapper.selectById(newStatusId);
                 if (newStatus == null) {
@@ -953,13 +957,12 @@ public class IssueService {
             // 工作流验证：检查状态转换是否允许
             // 获取用户在项目中的角色ID列表
             List<Integer> userRoleIds = getUserProjectRoleIds(currentUserId, issue.getProjectId());
-            
+
             // 获取可用的状态转换
             WorkflowTransitionResponseDTO availableTransitions = workflowService.getAvailableTransitions(
                     issue.getTrackerId(),
                     issue.getStatusId(),
-                    userRoleIds.isEmpty() ? null : userRoleIds
-            );
+                    userRoleIds.isEmpty() ? null : userRoleIds);
 
             // 检查新状态是否在可用转换列表中
             boolean isTransitionAllowed = false;
@@ -976,7 +979,8 @@ public class IssueService {
                 log.warn("状态转换不允许，任务ID: {}, 当前状态ID: {}, 目标状态ID: {}, 用户角色IDs: {}",
                         id, issue.getStatusId(), newStatusId, userRoleIds);
                 throw new BusinessException(ResultCode.PARAM_INVALID,
-                        "不允许从状态 \"" + availableTransitions.getCurrentStatusName() + "\" 转换到状态 \"" + newStatus.getName() + "\"，请检查工作流规则");
+                        "不允许从状态 \"" + availableTransitions.getCurrentStatusName() + "\" 转换到状态 \"" + newStatus.getName()
+                                + "\"，请检查工作流规则");
             }
 
             // 验证指派人限制
@@ -1194,7 +1198,8 @@ public class IssueService {
             List<Issue> children = getChildrenRecursive(id, recursive != null && recursive);
 
             // 权限过滤：私有任务仅项目成员可见
-            List<Issue> filteredChildren = filterPrivateIssues(children, currentUserId, parentIssue.getProjectId(), isAdmin);
+            List<Issue> filteredChildren = filterPrivateIssues(children, currentUserId, parentIssue.getProjectId(),
+                    isAdmin);
 
             // 转换为响应 DTO
             List<IssueListItemResponseDTO> dtoList = filteredChildren.stream()
@@ -1274,5 +1279,121 @@ public class IssueService {
                     return true;
                 })
                 .toList();
+    }
+
+    /**
+     * 创建任务关联
+     *
+     * @param issueId    源任务ID
+     * @param requestDTO 创建关联请求
+     * @return 任务关联响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueRelationResponseDTO createIssueRelation(Long issueId, IssueRelationCreateRequestDTO requestDTO) {
+        MDC.put("operation", "create_issue_relation");
+        MDC.put("issueId", String.valueOf(issueId));
+        MDC.put("targetIssueId", String.valueOf(requestDTO.getTargetIssueId()));
+        MDC.put("relationType", requestDTO.getRelationType());
+
+        try {
+            log.info("开始创建任务关联，源任务ID: {}, 目标任务ID: {}, 关联类型: {}",
+                    issueId, requestDTO.getTargetIssueId(), requestDTO.getRelationType());
+
+            // 查询源任务是否存在
+            Issue sourceIssue = issueMapper.selectById(issueId);
+            if (sourceIssue == null) {
+                log.warn("源任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "源任务不存在");
+            }
+
+            // 查询目标任务是否存在
+            Issue targetIssue = issueMapper.selectById(requestDTO.getTargetIssueId());
+            if (targetIssue == null) {
+                log.warn("目标任务不存在，任务ID: {}", requestDTO.getTargetIssueId());
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "目标任务不存在");
+            }
+
+            // 不能关联自己
+            if (issueId.equals(requestDTO.getTargetIssueId())) {
+                log.warn("不能将任务关联到自己，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "不能将任务关联到自己");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 edit_issues 权限或系统管理员
+            // 检查源任务的权限
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, sourceIssue.getProjectId(), "edit_issues")) {
+                    log.warn("用户无权限编辑源任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, sourceIssue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限编辑源任务，需要 edit_issues 权限");
+                }
+            }
+
+            // 验证关联类型
+            String relationType = requestDTO.getRelationType();
+            if (relationType == null || relationType.trim().isEmpty()) {
+                log.warn("关联类型不能为空");
+                throw new BusinessException(ResultCode.PARAM_INVALID, "关联类型不能为空");
+            }
+
+            // 验证延迟天数（仅用于 precedes/follows 类型）
+            // delay 为 null 或 0 时允许，只有当 delay > 0 且关联类型不是 precedes/follows 时才报错
+            Integer delay = requestDTO.getDelay();
+            if (delay != null && delay > 0 && !relationType.equals("precedes") && !relationType.equals("follows")) {
+                log.warn("延迟天数仅用于 precedes/follows 类型，关联类型: {}, 延迟天数: {}", relationType, delay);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "延迟天数仅用于 precedes/follows 类型");
+            }
+
+            // 检查是否已存在相同的关联
+            LambdaQueryWrapper<IssueRelation> checkQuery = new LambdaQueryWrapper<>();
+            checkQuery.eq(IssueRelation::getIssueFromId, issueId.intValue())
+                    .eq(IssueRelation::getIssueToId, requestDTO.getTargetIssueId().intValue())
+                    .eq(IssueRelation::getRelationType, relationType);
+            IssueRelation existingRelation = issueRelationMapper.selectOne(checkQuery);
+            if (existingRelation != null) {
+                log.warn("任务关联已存在，源任务ID: {}, 目标任务ID: {}, 关联类型: {}",
+                        issueId, requestDTO.getTargetIssueId(), relationType);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "该任务关联已存在");
+            }
+
+            // 创建任务关联
+            IssueRelation relation = new IssueRelation();
+            relation.setIssueFromId(issueId.intValue());
+            relation.setIssueToId(requestDTO.getTargetIssueId().intValue());
+            relation.setRelationType(relationType);
+            relation.setDelay(delay);
+
+            int insertResult = issueRelationMapper.insert(relation);
+            if (insertResult <= 0) {
+                log.error("任务关联创建失败，插入数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关联创建失败");
+            }
+
+            log.info("任务关联创建成功，关联ID: {}", relation.getId());
+
+            // 构建响应 DTO
+            IssueRelationResponseDTO responseDTO = new IssueRelationResponseDTO();
+            responseDTO.setId(relation.getId());
+            responseDTO.setIssueFromId(issueId);
+            responseDTO.setIssueFromSubject(sourceIssue.getSubject());
+            responseDTO.setIssueToId(requestDTO.getTargetIssueId());
+            responseDTO.setIssueToSubject(targetIssue.getSubject());
+            responseDTO.setRelationType(relationType);
+            responseDTO.setDelay(delay);
+
+            return responseDTO;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务关联创建失败，源任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关联创建失败");
+        } finally {
+            MDC.clear();
+        }
     }
 }

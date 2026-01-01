@@ -3,12 +3,14 @@ package com.github.jredmine.controller;
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.service.IssueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -78,6 +80,16 @@ public class IssueController {
             @RequestParam(value = "recursive", defaultValue = "false") Boolean recursive) {
         List<IssueListItemResponseDTO> result = issueService.getIssueChildren(id, recursive);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "添加任务关联", description = "添加任务关联关系。支持多种关联类型（相关、重复、阻塞、前置等）。支持设置延迟天数（用于甘特图）。需要认证，需要 edit_issues 权限或系统管理员。不能将任务关联到自己。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
+    @PostMapping("/{id}/relations")
+    public ApiResponse<IssueRelationResponseDTO> createIssueRelation(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueRelationCreateRequestDTO requestDTO) {
+        IssueRelationResponseDTO result = issueService.createIssueRelation(id, requestDTO);
+        return ApiResponse.success("任务关联创建成功", result);
     }
 
     @Operation(summary = "更新任务", description = "更新任务信息。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。如果状态改变，需要遵循工作流规则。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))
