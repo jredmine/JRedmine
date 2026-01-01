@@ -1,5 +1,6 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
@@ -84,6 +85,16 @@ public class IssueController {
             @Valid @RequestBody IssueStatusUpdateRequestDTO requestDTO) {
         IssueDetailResponseDTO result = issueService.updateIssueStatus(id, requestDTO);
         return ApiResponse.success("任务状态更新成功", result);
+    }
+
+    @Operation(summary = "分配任务", description = "分配任务给指定用户或取消分配。需要认证，需要 edit_issues 权限或系统管理员。支持取消分配（assignedToId 为 null 或 0）。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
+    @PutMapping("/{id}/assign")
+    public ApiResponse<IssueDetailResponseDTO> assignIssue(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueAssignRequestDTO requestDTO) {
+        IssueDetailResponseDTO result = issueService.assignIssue(id, requestDTO);
+        return ApiResponse.success("任务分配成功", result);
     }
 
     @Operation(summary = "删除任务", description = "删除任务（物理删除）。需要认证，需要 delete_issues 权限或系统管理员。如果任务存在子任务，则不能删除，需要先删除子任务。", security = @SecurityRequirement(name = "bearerAuth"))

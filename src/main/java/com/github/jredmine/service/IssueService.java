@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
@@ -1044,6 +1045,114 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务状态更新失败，任务ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态更新失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 分配任务
+     *
+     * @param id         任务ID
+     * @param requestDTO 分配任务请求
+     * @return 任务详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueDetailResponseDTO assignIssue(Long id, IssueAssignRequestDTO requestDTO) {
+        MDC.put("operation", "assign_issue");
+        MDC.put("issueId", String.valueOf(id));
+        if (requestDTO.getAssignedToId() != null) {
+            MDC.put("assignedToId", String.valueOf(requestDTO.getAssignedToId()));
+        }
+
+        try {
+            log.info("开始分配任务，任务ID: {}, 指派人ID: {}", id, requestDTO.getAssignedToId());
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(id);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 edit_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "edit_issues")) {
+                    log.warn("用户无权限分配任务，任务ID: {}, 项目ID: {}, 用户ID: {}", id, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限分配任务，需要 edit_issues 权限");
+                }
+            }
+
+            // 乐观锁检查
+            if (requestDTO.getLockVersion() != null && !requestDTO.getLockVersion().equals(issue.getLockVersion())) {
+                log.warn("任务已被其他用户修改，任务ID: {}, 当前版本: {}, 请求版本: {}",
+                        id, issue.getLockVersion(), requestDTO.getLockVersion());
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
+            }
+
+            // 处理指派人更新
+            Long assignedToId = requestDTO.getAssignedToId();
+            Long oldAssignedToId = issue.getAssignedToId();
+
+            if (assignedToId == null || assignedToId == 0) {
+                // 取消分配
+                if (oldAssignedToId == null) {
+                    log.info("任务已经是未分配状态，任务ID: {}", id);
+                    return getIssueDetailById(id);
+                }
+                issue.setAssignedToId(null);
+                log.info("取消任务分配，任务ID: {}, 原指派人ID: {}", id, oldAssignedToId);
+            } else {
+                // 验证指派人是否存在
+                User assignedUser = userMapper.selectById(assignedToId);
+                if (assignedUser == null) {
+                    log.warn("指派人不存在，用户ID: {}", assignedToId);
+                    throw new BusinessException(ResultCode.USER_NOT_FOUND, "指派人不存在");
+                }
+
+                // 如果指派人没有变化，直接返回
+                if (assignedToId.equals(oldAssignedToId)) {
+                    log.info("任务指派人未变化，任务ID: {}, 指派人ID: {}", id, assignedToId);
+                    return getIssueDetailById(id);
+                }
+
+                issue.setAssignedToId(assignedToId);
+                log.info("分配任务，任务ID: {}, 原指派人ID: {}, 新指派人ID: {}", id, oldAssignedToId, assignedToId);
+            }
+
+            // 更新乐观锁版本号和更新时间
+            issue.setLockVersion(issue.getLockVersion() + 1);
+            issue.setUpdatedOn(LocalDateTime.now());
+
+            // 保存任务
+            int updateResult = issueMapper.updateById(issue);
+            if (updateResult <= 0) {
+                log.error("任务分配失败，更新数据库失败，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分配失败");
+            }
+
+            log.info("任务分配成功，任务ID: {}", id);
+
+            // TODO: 记录分配变更历史到 journals 表
+            // 包括原指派人、新指派人信息
+            // 暂时跳过，后续实现
+
+            // TODO: 发送通知给新指派人
+            // 如果指派人发生变化，发送邮件通知
+            // 暂时跳过，后续实现
+
+            // 查询更新后的任务（包含关联信息）
+            return getIssueDetailById(id);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务分配失败，任务ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分配失败");
         } finally {
             MDC.clear();
         }
