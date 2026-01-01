@@ -22,7 +22,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 任务管理控制器
@@ -64,6 +67,16 @@ public class IssueController {
     @GetMapping("/{id}")
     public ApiResponse<IssueDetailResponseDTO> getIssueById(@PathVariable Long id) {
         IssueDetailResponseDTO result = issueService.getIssueDetailById(id);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取任务子任务列表", description = "查询任务的所有子任务。需要认证，需要 view_issues 权限或系统管理员。支持递归查询（包含子任务的子任务）。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/{id}/children")
+    public ApiResponse<List<IssueListItemResponseDTO>> getIssueChildren(
+            @PathVariable Long id,
+            @RequestParam(value = "recursive", defaultValue = "false") Boolean recursive) {
+        List<IssueListItemResponseDTO> result = issueService.getIssueChildren(id, recursive);
         return ApiResponse.success(result);
     }
 

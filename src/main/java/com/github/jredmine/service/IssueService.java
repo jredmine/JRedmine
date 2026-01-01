@@ -164,10 +164,14 @@ public class IssueService {
                 }
             }
 
-            // 验证指派人是否存在（如果提供且不为0）
-            // assignedToId 为 0 或 null 表示未分配
+            // 处理指派人：如果未指定或为0，则自动设置为当前用户
             Long assignedToId = requestDTO.getAssignedToId();
-            if (assignedToId != null && assignedToId != 0) {
+            if (assignedToId == null || assignedToId == 0) {
+                // 未指定指派人，自动设置为当前用户
+                assignedToId = currentUserId;
+                log.info("未指定指派人，自动设置为当前用户，用户ID: {}", currentUserId);
+            } else {
+                // 验证指定的指派人是否存在
                 User assignedUser = userMapper.selectById(assignedToId);
                 if (assignedUser == null) {
                     log.warn("指派人不存在，用户ID: {}", assignedToId);
@@ -183,8 +187,8 @@ public class IssueService {
             issue.setDescription(requestDTO.getDescription());
             issue.setStatusId(statusId);
             issue.setPriorityId(requestDTO.getPriorityId());
-            // assignedToId 为 0 时设置为 null，表示未分配
-            issue.setAssignedToId((assignedToId != null && assignedToId != 0) ? assignedToId : null);
+            // 设置指派人（已处理：未指定时自动设置为当前用户）
+            issue.setAssignedToId(assignedToId);
             // categoryId 为 0 时设置为 null，表示没有分类
             issue.setCategoryId((categoryId != null && categoryId != 0) ? categoryId : null);
             // fixedVersionId 为 0 时设置为 null，表示没有修复版本
@@ -358,17 +362,12 @@ public class IssueService {
                 boolean ascending = "asc".equalsIgnoreCase(sortOrder);
                 switch (sortField) {
                     case "created_on":
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getCreatedOn);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getCreatedOn);
-                        }
-                        break;
                     case "updated_on":
+                        // 统一使用 id 排序
                         if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getUpdatedOn);
+                            queryWrapper.orderByAsc(Issue::getId);
                         } else {
-                            queryWrapper.orderByDesc(Issue::getUpdatedOn);
+                            queryWrapper.orderByDesc(Issue::getId);
                         }
                         break;
                     case "priority":
@@ -1156,5 +1155,124 @@ public class IssueService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * 获取任务的子任务列表
+     *
+     * @param id        任务ID
+     * @param recursive 是否递归查询（包含子任务的子任务）
+     * @return 子任务列表
+     */
+    public List<IssueListItemResponseDTO> getIssueChildren(Long id, Boolean recursive) {
+        MDC.put("operation", "get_issue_children");
+        MDC.put("issueId", String.valueOf(id));
+        MDC.put("recursive", String.valueOf(recursive != null && recursive));
+
+        try {
+            log.info("开始查询任务子任务列表，任务ID: {}, 递归查询: {}", id, recursive);
+
+            // 查询父任务是否存在
+            Issue parentIssue = issueMapper.selectById(id);
+            if (parentIssue == null) {
+                log.warn("任务不存在，任务ID: {}", id);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, parentIssue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 用户ID: {}", id, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+            }
+
+            // 查询子任务
+            List<Issue> children = getChildrenRecursive(id, recursive != null && recursive);
+
+            // 权限过滤：私有任务仅项目成员可见
+            List<Issue> filteredChildren = filterPrivateIssues(children, currentUserId, parentIssue.getProjectId(), isAdmin);
+
+            // 转换为响应 DTO
+            List<IssueListItemResponseDTO> dtoList = filteredChildren.stream()
+                    .map(this::toIssueListItemResponseDTO)
+                    .toList();
+
+            log.info("任务子任务列表查询成功，任务ID: {}, 子任务数量: {}", id, dtoList.size());
+            return dtoList;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务子任务列表查询失败，任务ID: {}", id, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务子任务列表查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 递归获取子任务
+     *
+     * @param parentId  父任务ID
+     * @param recursive 是否递归查询
+     * @return 子任务列表
+     */
+    private List<Issue> getChildrenRecursive(Long parentId, boolean recursive) {
+        List<Issue> allChildren = new ArrayList<>();
+
+        // 查询直接子任务
+        LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(Issue::getParentId, parentId);
+        queryWrapper.orderByAsc(Issue::getId);
+        List<Issue> directChildren = issueMapper.selectList(queryWrapper);
+
+        allChildren.addAll(directChildren);
+
+        // 如果递归查询，继续查询子任务的子任务
+        if (recursive) {
+            for (Issue child : directChildren) {
+                List<Issue> grandchildren = getChildrenRecursive(child.getId(), true);
+                allChildren.addAll(grandchildren);
+            }
+        }
+
+        return allChildren;
+    }
+
+    /**
+     * 过滤私有任务（私有任务仅项目成员可见）
+     *
+     * @param issues    任务列表
+     * @param userId    当前用户ID
+     * @param projectId 项目ID
+     * @param isAdmin   是否是管理员
+     * @return 过滤后的任务列表
+     */
+    private List<Issue> filterPrivateIssues(List<Issue> issues, Long userId, Long projectId, boolean isAdmin) {
+        if (isAdmin) {
+            // 管理员可以看到所有任务
+            return issues;
+        }
+
+        // 检查用户是否是项目成员
+        LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+        memberQuery.eq(Member::getUserId, userId)
+                .eq(Member::getProjectId, projectId);
+        Member member = memberMapper.selectOne(memberQuery);
+        boolean isProjectMember = member != null;
+
+        // 过滤私有任务
+        return issues.stream()
+                .filter(issue -> {
+                    // 公开任务或项目成员可以看到私有任务
+                    if (Boolean.TRUE.equals(issue.getIsPrivate())) {
+                        return isProjectMember;
+                    }
+                    return true;
+                })
+                .toList();
     }
 }
