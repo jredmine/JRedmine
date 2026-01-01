@@ -6,6 +6,7 @@ import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
@@ -100,6 +101,26 @@ public class IssueController {
             @PathVariable Integer relationId) {
         issueService.deleteIssueRelation(id, relationId);
         return ApiResponse.success("任务关联删除成功", null);
+    }
+
+    @Operation(summary = "添加任务关注者", description = "添加任务关注者。关注者会收到任务更新通知。可以关注自己。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @PostMapping("/{id}/watchers")
+    public ApiResponse<Void> addIssueWatcher(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueWatcherCreateRequestDTO requestDTO) {
+        issueService.addIssueWatcher(id, requestDTO);
+        return ApiResponse.success("任务关注者添加成功", null);
+    }
+
+    @Operation(summary = "删除任务关注者", description = "删除任务关注者。只能删除自己的关注，或需要 edit_issues 权限。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @DeleteMapping("/{id}/watchers/{userId}")
+    public ApiResponse<Void> deleteIssueWatcher(
+            @PathVariable Long id,
+            @PathVariable Long userId) {
+        issueService.deleteIssueWatcher(id, userId);
+        return ApiResponse.success("任务关注者删除成功", null);
     }
 
     @Operation(summary = "更新任务", description = "更新任务信息。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。如果状态改变，需要遵循工作流规则。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))

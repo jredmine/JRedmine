@@ -8,6 +8,7 @@ import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -20,10 +21,12 @@ import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
+import com.github.jredmine.entity.Watcher;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.issue.IssueRelationMapper;
+import com.github.jredmine.mapper.issue.WatcherMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
@@ -58,6 +61,7 @@ public class IssueService {
 
     private final IssueMapper issueMapper;
     private final IssueRelationMapper issueRelationMapper;
+    private final WatcherMapper watcherMapper;
     private final ProjectMapper projectMapper;
     private final TrackerMapper trackerMapper;
     private final IssueStatusMapper issueStatusMapper;
@@ -1463,6 +1467,162 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务关联删除失败，任务ID: {}, 关联ID: {}", issueId, relationId, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关联删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 添加任务关注者
+     *
+     * @param issueId    任务ID
+     * @param requestDTO 添加关注者请求
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void addIssueWatcher(Long issueId, IssueWatcherCreateRequestDTO requestDTO) {
+        MDC.put("operation", "add_issue_watcher");
+        MDC.put("issueId", String.valueOf(issueId));
+        MDC.put("userId", String.valueOf(requestDTO.getUserId()));
+
+        try {
+            log.info("开始添加任务关注者，任务ID: {}, 用户ID: {}", issueId, requestDTO.getUserId());
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+            }
+
+            // 验证要添加的用户是否存在
+            User watcherUser = userMapper.selectById(requestDTO.getUserId());
+            if (watcherUser == null) {
+                log.warn("用户不存在，用户ID: {}", requestDTO.getUserId());
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+
+            // 检查是否已经是关注者
+            LambdaQueryWrapper<Watcher> checkQuery = new LambdaQueryWrapper<>();
+            checkQuery.eq(Watcher::getWatchableType, "Issue")
+                    .eq(Watcher::getWatchableId, issueId.intValue())
+                    .eq(Watcher::getUserId, requestDTO.getUserId().intValue());
+            Watcher existingWatcher = watcherMapper.selectOne(checkQuery);
+            if (existingWatcher != null) {
+                log.info("用户已经是任务关注者，任务ID: {}, 用户ID: {}", issueId, requestDTO.getUserId());
+                return; // 已经是关注者，直接返回成功
+            }
+
+            // 创建关注者记录
+            Watcher watcher = new Watcher();
+            watcher.setWatchableType("Issue");
+            watcher.setWatchableId(issueId.intValue());
+            watcher.setUserId(requestDTO.getUserId().intValue());
+
+            int insertResult = watcherMapper.insert(watcher);
+            if (insertResult <= 0) {
+                log.error("任务关注者添加失败，插入数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者添加失败");
+            }
+
+            log.info("任务关注者添加成功，任务ID: {}, 用户ID: {}, 关注者ID: {}",
+                    issueId, requestDTO.getUserId(), watcher.getId());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务关注者添加失败，任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者添加失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 删除任务关注者
+     *
+     * @param issueId 任务ID
+     * @param userId  用户ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteIssueWatcher(Long issueId, Long userId) {
+        MDC.put("operation", "delete_issue_watcher");
+        MDC.put("issueId", String.valueOf(issueId));
+        MDC.put("userId", String.valueOf(userId));
+
+        try {
+            log.info("开始删除任务关注者，任务ID: {}, 用户ID: {}", issueId, userId);
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            // 如果删除的不是自己的关注，需要 edit_issues 权限
+            boolean isDeletingSelf = currentUserId.equals(userId);
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+
+                // 如果删除的不是自己的关注，需要 edit_issues 权限
+                if (!isDeletingSelf) {
+                    if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "edit_issues")) {
+                        log.warn("用户无权限删除其他用户的关注，任务ID: {}, 项目ID: {}, 用户ID: {}, 目标用户ID: {}",
+                                issueId, issue.getProjectId(), currentUserId, userId);
+                        throw new BusinessException(ResultCode.FORBIDDEN, "只能删除自己的关注，或需要 edit_issues 权限");
+                    }
+                }
+            }
+
+            // 查询关注者记录是否存在
+            LambdaQueryWrapper<Watcher> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Watcher::getWatchableType, "Issue")
+                    .eq(Watcher::getWatchableId, issueId.intValue())
+                    .eq(Watcher::getUserId, userId.intValue());
+            Watcher watcher = watcherMapper.selectOne(queryWrapper);
+            if (watcher == null) {
+                log.warn("任务关注者不存在，任务ID: {}, 用户ID: {}", issueId, userId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者不存在");
+            }
+
+            // 删除关注者记录
+            int deleteResult = watcherMapper.deleteById(watcher.getId());
+            if (deleteResult <= 0) {
+                log.error("任务关注者删除失败，删除数据库失败，关注者ID: {}", watcher.getId());
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者删除失败");
+            }
+
+            log.info("任务关注者删除成功，任务ID: {}, 用户ID: {}", issueId, userId);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务关注者删除失败，任务ID: {}, 用户ID: {}", issueId, userId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者删除失败");
         } finally {
             MDC.clear();
         }
