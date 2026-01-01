@@ -291,4 +291,14 @@ public class ProjectController {
         IssueCategoryResponseDTO result = issueService.updateIssueCategory(projectId, id, requestDTO);
         return ApiResponse.success("任务分类更新成功", result);
     }
+
+    @Operation(summary = "删除任务分类", description = "删除项目任务分类。如果分类正在被任务使用，则不能删除。需要认证，需要 manage_categories 或 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_categories') or hasPermission(#projectId, 'Project', 'manage_projects')")
+    @DeleteMapping("/{projectId}/issue-categories/{id}")
+    public ApiResponse<Void> deleteIssueCategory(
+            @PathVariable Long projectId,
+            @PathVariable Integer id) {
+        issueService.deleteIssueCategory(projectId, id);
+        return ApiResponse.success("任务分类删除成功", null);
+    }
 }

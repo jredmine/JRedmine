@@ -1886,4 +1886,87 @@ public class IssueService {
             MDC.clear();
         }
     }
+
+    /**
+     * 删除任务分类
+     *
+     * @param projectId  项目ID
+     * @param categoryId 分类ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteIssueCategory(Long projectId, Integer categoryId) {
+        MDC.put("operation", "delete_issue_category");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("categoryId", String.valueOf(categoryId));
+
+        try {
+            log.info("开始删除任务分类，项目ID: {}, 分类ID: {}", projectId, categoryId);
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询分类是否存在
+            IssueCategory category = issueCategoryMapper.selectById(categoryId);
+            if (category == null) {
+                log.warn("任务分类不存在，分类ID: {}", categoryId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类不存在");
+            }
+
+            // 验证分类是否属于该项目
+            if (!category.getProjectId().equals(projectId.intValue())) {
+                log.warn("任务分类不属于该项目，项目ID: {}, 分类ID: {}, 分类所属项目ID: {}",
+                        projectId, categoryId, category.getProjectId());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_categories 权限或系统管理员
+            // 注意：manage_categories 权限可能不在 Permission 枚举中，可以使用 manage_projects 权限
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_categories")) {
+                    // 如果没有 manage_categories 权限，尝试使用 manage_projects 权限
+                    if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_projects")) {
+                        log.warn("用户无权限删除任务分类，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN,
+                                "无权限删除任务分类，需要 manage_categories 或 manage_projects 权限");
+                    }
+                }
+            }
+
+            // 检查是否有任务使用该分类
+            LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+            issueQuery.eq(Issue::getCategoryId, categoryId);
+            Long issueCount = issueMapper.selectCount(issueQuery);
+            if (issueCount > 0) {
+                log.warn("任务分类正在被任务使用，不能删除，分类ID: {}, 使用数量: {}", categoryId, issueCount);
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "任务分类正在被 " + issueCount + " 个任务使用，请先将这些任务的分类移除后再删除");
+            }
+
+            // 删除分类
+            int deleteResult = issueCategoryMapper.deleteById(categoryId);
+            if (deleteResult <= 0) {
+                log.error("任务分类删除失败，删除数据库失败，分类ID: {}", categoryId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类删除失败");
+            }
+
+            log.info("任务分类删除成功，分类ID: {}, 分类名称: {}", categoryId, category.getName());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务分类删除失败，项目ID: {}, 分类ID: {}", projectId, categoryId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
 }
