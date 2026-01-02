@@ -54,7 +54,7 @@ public class IssueController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
     @GetMapping
     public ApiResponse<PageResponse<IssueListItemResponseDTO>> listIssues(
-            IssueListRequestDTO requestDTO) {
+            @Valid IssueListRequestDTO requestDTO) {
         PageResponse<IssueListItemResponseDTO> result = issueService.listIssues(requestDTO);
         return ApiResponse.success(result);
     }
@@ -141,7 +141,7 @@ public class IssueController {
     @GetMapping("/{id}/journals")
     public ApiResponse<PageResponse<IssueJournalResponseDTO>> listIssueJournals(
             @PathVariable Long id,
-            IssueJournalListRequestDTO requestDTO) {
+            @Valid IssueJournalListRequestDTO requestDTO) {
         PageResponse<IssueJournalResponseDTO> result = issueService.listIssueJournals(id, requestDTO);
         return ApiResponse.success(result);
     }

@@ -65,10 +65,14 @@ public class WorkflowService {
         MDC.put("operation", "list_workflows");
 
         try {
-            log.debug("开始查询工作流列表，页码: {}, 每页数量: {}", current, size);
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer validCurrent = (current != null && current > 0) ? current : 1;
+            Integer validSize = (size != null && size > 0) ? size : 10;
+
+            log.debug("开始查询工作流列表，页码: {}, 每页数量: {}", validCurrent, validSize);
 
             // 创建分页对象
-            Page<Workflow> page = new Page<>(current, size);
+            Page<Workflow> page = new Page<>(validCurrent, validSize);
 
             // 构建查询条件
             LambdaQueryWrapper<Workflow> queryWrapper = new LambdaQueryWrapper<>();

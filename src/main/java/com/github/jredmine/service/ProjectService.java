@@ -101,7 +101,11 @@ public class ProjectService {
         MDC.put("operation", "list_projects");
 
         try {
-            log.debug("开始查询项目列表，页码: {}, 每页数量: {}, 关键词: {}", current, size, keyword);
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer validCurrent = (current != null && current > 0) ? current : 1;
+            Integer validSize = (size != null && size > 0) ? size : 10;
+
+            log.debug("开始查询项目列表，页码: {}, 每页数量: {}, 关键词: {}", validCurrent, validSize, keyword);
 
             // 获取当前用户信息
             User currentUser = securityUtils.getCurrentUser();
@@ -122,7 +126,7 @@ public class ProjectService {
             }
 
             // 创建分页对象
-            Page<Project> page = new Page<>(current, size);
+            Page<Project> page = new Page<>(validCurrent, validSize);
 
             // 构建查询条件
             LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
@@ -913,7 +917,11 @@ public class ProjectService {
         MDC.put("projectId", String.valueOf(projectId));
 
         try {
-            log.debug("开始查询项目成员列表，项目ID: {}, 页码: {}, 每页数量: {}", projectId, current, size);
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer validCurrent = (current != null && current > 0) ? current : 1;
+            Integer validSize = (size != null && size > 0) ? size : 10;
+
+            log.debug("开始查询项目成员列表，项目ID: {}, 页码: {}, 每页数量: {}", projectId, validCurrent, validSize);
 
             // 验证项目是否存在
             Project project = projectMapper.selectById(projectId);
@@ -958,7 +966,7 @@ public class ProjectService {
                         .collect(Collectors.toList());
 
                 if (userIds.isEmpty()) {
-                    return PageResponse.of(List.of(), 0, current, size);
+                    return PageResponse.of(List.of(), 0, validCurrent, validSize);
                 }
 
                 // 查询用户信息并过滤
@@ -989,27 +997,27 @@ public class ProjectService {
             int totalCount = allMemberIds.size();
 
             // 计算分页范围
-            int start = (current - 1) * size;
+            int start = (validCurrent - 1) * validSize;
             if (start >= totalCount) {
                 return PageResponse.of(
                         List.of(),
                         totalCount,
-                        current,
-                        size);
+                        validCurrent,
+                        validSize);
             }
 
             // 获取当前页的成员ID列表
             List<Long> memberIds = allMemberIds.stream()
                     .skip(start)
-                    .limit(size)
+                    .limit(validSize)
                     .collect(Collectors.toList());
 
             if (memberIds.isEmpty()) {
                 return PageResponse.of(
                         List.of(),
                         totalCount,
-                        current,
-                        size);
+                        validCurrent,
+                        validSize);
             }
 
             // 使用 mybatis-plus-join 进行连表查询（只查询当前页的成员）
@@ -1112,8 +1120,8 @@ public class ProjectService {
             return PageResponse.of(
                     dtoList,
                     totalCount,
-                    current,
-                    size);
+                    validCurrent,
+                    validSize);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -2229,8 +2237,12 @@ public class ProjectService {
             // 按ID倒序排序
             queryWrapper.orderByDesc(Project::getId);
 
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer validCurrent = (current != null && current > 0) ? current : 1;
+            Integer validSize = (size != null && size > 0) ? size : 10;
+
             // 分页查询
-            Page<Project> page = new Page<>(current != null ? current : 1, size != null ? size : 10);
+            Page<Project> page = new Page<>(validCurrent, validSize);
             Page<Project> resultPage = projectMapper.selectPage(page, queryWrapper);
 
             // 转换为响应DTO

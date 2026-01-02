@@ -1,6 +1,8 @@
 package com.github.jredmine.dto.request.issue;
 
+import com.github.jredmine.dto.request.PageRequestDTO;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 /**
  * 任务列表查询请求DTO
@@ -9,16 +11,8 @@ import lombok.Data;
  * @author panfeng
  */
 @Data
-public class IssueListRequestDTO {
-    /**
-     * 当前页码
-     */
-    private Integer current = 1;
-
-    /**
-     * 每页数量
-     */
-    private Integer size = 10;
+@EqualsAndHashCode(callSuper = true)
+public class IssueListRequestDTO extends PageRequestDTO {
 
     /**
      * 项目ID

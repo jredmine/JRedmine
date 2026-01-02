@@ -271,13 +271,9 @@ public class IssueService {
         MDC.put("operation", "list_issues");
 
         try {
-            // 设置默认值并验证：current 至少为 1，size 至少为 10
-            Integer current = requestDTO.getCurrent() != null && requestDTO.getCurrent() > 0
-                    ? requestDTO.getCurrent()
-                    : 1;
-            Integer size = requestDTO.getSize() != null && requestDTO.getSize() > 0
-                    ? requestDTO.getSize()
-                    : 10;
+            // 分页参数已通过注解验证，null 值使用默认值
+            Integer current = requestDTO.getCurrent() != null ? requestDTO.getCurrent() : 1;
+            Integer size = requestDTO.getSize() != null ? requestDTO.getSize() : 10;
             String sortOrder = requestDTO.getSortOrder() != null ? requestDTO.getSortOrder() : "desc";
 
             log.debug("开始查询任务列表，页码: {}, 每页数量: {}", current, size);
@@ -1776,13 +1772,9 @@ public class IssueService {
         MDC.put("issueId", String.valueOf(issueId));
 
         try {
-            // 设置默认值并验证：current 至少为 1，size 至少为 10
-            Integer current = requestDTO.getCurrent() != null && requestDTO.getCurrent() > 0
-                    ? requestDTO.getCurrent()
-                    : 1;
-            Integer size = requestDTO.getSize() != null && requestDTO.getSize() > 0
-                    ? requestDTO.getSize()
-                    : 10;
+            // 分页参数已通过注解验证，null 值使用默认值
+            Integer current = requestDTO.getCurrent() != null ? requestDTO.getCurrent() : 1;
+            Integer size = requestDTO.getSize() != null ? requestDTO.getSize() : 10;
 
             log.debug("开始查询任务活动日志列表，任务ID: {}, 页码: {}, 每页数量: {}", issueId, current, size);
 

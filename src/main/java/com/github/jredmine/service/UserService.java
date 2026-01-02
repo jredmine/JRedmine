@@ -190,10 +190,14 @@ public class UserService {
         MDC.put("size", String.valueOf(size));
 
         try {
-            log.debug("开始查询用户列表，页码: {}, 每页大小: {}, 登录名过滤: {}", current, size, login);
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer validCurrent = (current != null && current > 0) ? current : 1;
+            Integer validSize = (size != null && size > 0) ? size : 10;
+
+            log.debug("开始查询用户列表，页码: {}, 每页大小: {}, 登录名过滤: {}", validCurrent, validSize, login);
 
             // 创建分页对象（MyBatis Plus 分页从1开始）
-            Page<User> page = new Page<>(current, size);
+            Page<User> page = new Page<>(validCurrent, validSize);
 
             // 构建查询条件
             LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
