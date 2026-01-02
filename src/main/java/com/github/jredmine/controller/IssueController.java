@@ -6,10 +6,12 @@ import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueJournalCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.service.IssueService;
@@ -121,6 +123,16 @@ public class IssueController {
             @PathVariable Long userId) {
         issueService.deleteIssueWatcher(id, userId);
         return ApiResponse.success("任务关注者删除成功", null);
+    }
+
+    @Operation(summary = "创建任务评论", description = "为任务添加评论/备注。支持公开评论和私有备注（只有项目成员可见）。需要认证，需要 add_notes 或 edit_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('add_notes') or authentication.principal.hasPermission('edit_issues')")
+    @PostMapping("/{id}/journals")
+    public ApiResponse<IssueJournalResponseDTO> createIssueJournal(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueJournalCreateRequestDTO requestDTO) {
+        IssueJournalResponseDTO result = issueService.createIssueJournal(id, requestDTO);
+        return ApiResponse.success("任务评论创建成功", result);
     }
 
     @Operation(summary = "更新任务", description = "更新任务信息。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。如果状态改变，需要遵循工作流规则。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))

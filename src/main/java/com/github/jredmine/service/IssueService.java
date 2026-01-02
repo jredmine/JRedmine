@@ -11,18 +11,21 @@ import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueJournalCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueCategoryResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueCategory;
 import com.github.jredmine.entity.IssueRelation;
 import com.github.jredmine.entity.IssueStatus;
+import com.github.jredmine.entity.Journal;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
@@ -32,6 +35,7 @@ import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.issue.IssueCategoryMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.issue.IssueRelationMapper;
+import com.github.jredmine.mapper.issue.JournalMapper;
 import com.github.jredmine.mapper.issue.WatcherMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.TrackerMapper;
@@ -68,6 +72,7 @@ public class IssueService {
     private final IssueMapper issueMapper;
     private final IssueRelationMapper issueRelationMapper;
     private final IssueCategoryMapper issueCategoryMapper;
+    private final JournalMapper journalMapper;
     private final WatcherMapper watcherMapper;
     private final ProjectMapper projectMapper;
     private final TrackerMapper trackerMapper;
@@ -1657,6 +1662,97 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务关注者删除失败，任务ID: {}, 用户ID: {}", issueId, userId, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 创建任务评论
+     *
+     * @param issueId    任务ID
+     * @param requestDTO 创建评论请求
+     * @return 评论响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueJournalResponseDTO createIssueJournal(Long issueId, IssueJournalCreateRequestDTO requestDTO) {
+        MDC.put("operation", "create_issue_journal");
+        MDC.put("issueId", String.valueOf(issueId));
+
+        try {
+            log.info("开始创建任务评论，任务ID: {}", issueId);
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 add_notes 权限或系统管理员
+            // 如果没有 add_notes 权限，可以使用 edit_issues 权限（兼容处理）
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "add_notes")) {
+                    // 如果没有 add_notes 权限，尝试使用 edit_issues 权限
+                    if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "edit_issues")) {
+                        log.warn("用户无权限添加评论，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                                issueId, issue.getProjectId(), currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN, "无权限添加评论，需要 add_notes 或 edit_issues 权限");
+                    }
+                }
+            }
+
+            // 创建评论实体
+            Journal journal = new Journal();
+            journal.setJournalizedId(issueId.intValue());
+            journal.setJournalizedType("Issue");
+            journal.setUserId(currentUserId.intValue());
+            journal.setNotes(requestDTO.getNotes());
+            journal.setPrivateNotes(requestDTO.getPrivateNotes() != null ? requestDTO.getPrivateNotes() : false);
+            journal.setCreatedOn(LocalDateTime.now());
+            journal.setUpdatedOn(LocalDateTime.now());
+
+            // 保存评论
+            int insertResult = journalMapper.insert(journal);
+            if (insertResult <= 0) {
+                log.error("任务评论创建失败，插入数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务评论创建失败");
+            }
+
+            log.info("任务评论创建成功，任务ID: {}, 评论ID: {}", issueId, journal.getId());
+
+            // 构建响应 DTO
+            IssueJournalResponseDTO responseDTO = new IssueJournalResponseDTO();
+            responseDTO.setId(journal.getId());
+            responseDTO.setIssueId(issueId);
+            responseDTO.setNotes(journal.getNotes());
+            responseDTO.setCreatedOn(journal.getCreatedOn());
+            responseDTO.setUpdatedOn(journal.getUpdatedOn());
+            responseDTO.setPrivateNotes(journal.getPrivateNotes());
+            responseDTO.setUserId(currentUserId);
+            responseDTO.setUserName(currentUser.getLogin());
+
+            // 填充更新者信息（如果有）
+            if (journal.getUpdatedById() != null) {
+                responseDTO.setUpdatedById(journal.getUpdatedById().longValue());
+                User updatedBy = userMapper.selectById(journal.getUpdatedById().longValue());
+                if (updatedBy != null) {
+                    responseDTO.setUpdatedByName(updatedBy.getLogin());
+                }
+            }
+
+            return responseDTO;
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务评论创建失败，任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务评论创建失败");
         } finally {
             MDC.clear();
         }
