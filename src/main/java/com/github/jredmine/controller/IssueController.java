@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueBatchUpdateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCopyRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
@@ -67,6 +68,16 @@ public class IssueController {
             @Valid @RequestBody IssueCreateRequestDTO requestDTO) {
         IssueDetailResponseDTO result = issueService.createIssue(requestDTO);
         return ApiResponse.success("任务创建成功", result);
+    }
+
+    @Operation(summary = "复制任务", description = "复制任务到当前项目或指定项目。支持复制子任务、关联关系、关注者、评论等。需要认证，需要 view_issues 权限查看源任务，需要 add_issues 权限在目标项目创建任务或系统管理员。新任务的状态会重置为跟踪器的默认状态，完成度重置为0。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or (authentication.principal.hasPermission('view_issues') and authentication.principal.hasPermission('add_issues'))")
+    @PostMapping("/{id}/copy")
+    public ApiResponse<IssueDetailResponseDTO> copyIssue(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueCopyRequestDTO requestDTO) {
+        IssueDetailResponseDTO result = issueService.copyIssue(id, requestDTO);
+        return ApiResponse.success("任务复制成功", result);
     }
 
     @Operation(summary = "获取任务详情", description = "根据任务ID查询任务详细信息。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))

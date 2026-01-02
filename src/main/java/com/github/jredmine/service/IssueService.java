@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueBatchUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCopyRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
@@ -1008,6 +1009,266 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务删除失败，任务ID: {}", id, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 复制任务
+     *
+     * @param sourceIssueId 源任务ID
+     * @param requestDTO    复制请求
+     * @return 新任务详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueDetailResponseDTO copyIssue(Long sourceIssueId, IssueCopyRequestDTO requestDTO) {
+        MDC.put("operation", "copy_issue");
+        MDC.put("sourceIssueId", String.valueOf(sourceIssueId));
+
+        try {
+            log.info("开始复制任务，源任务ID: {}", sourceIssueId);
+
+            // 查询源任务是否存在
+            Issue sourceIssue = issueMapper.selectById(sourceIssueId);
+            if (sourceIssue == null) {
+                log.warn("源任务不存在，源任务ID: {}", sourceIssueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "源任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 确定目标项目ID：如果为 null 或 0，则使用源任务的项目ID
+            Long targetProjectId = (requestDTO.getTargetProjectId() != null && requestDTO.getTargetProjectId() != 0)
+                    ? requestDTO.getTargetProjectId()
+                    : sourceIssue.getProjectId();
+
+            // 验证源任务权限：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, sourceIssue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看源任务，源任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            sourceIssueId, sourceIssue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看源任务，需要 view_issues 权限");
+                }
+            }
+
+            // 验证目标项目权限：需要 add_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, targetProjectId, "add_issues")) {
+                    log.warn("用户无权限在目标项目创建任务，目标项目ID: {}, 用户ID: {}", targetProjectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限在目标项目创建任务，需要 add_issues 权限");
+                }
+            }
+
+            // 验证目标项目是否存在
+            Project targetProject = projectMapper.selectById(targetProjectId);
+            if (targetProject == null) {
+                log.warn("目标项目不存在，项目ID: {}", targetProjectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 确定新任务标题
+            String newSubject = requestDTO.getSubject();
+            if (newSubject == null || newSubject.trim().isEmpty()) {
+                newSubject = sourceIssue.getSubject() + " (副本)";
+            }
+
+            // 创建新任务实体（复制源任务的基本字段）
+            Issue newIssue = new Issue();
+            newIssue.setTrackerId(sourceIssue.getTrackerId());
+            newIssue.setProjectId(targetProjectId);
+            newIssue.setSubject(newSubject);
+            newIssue.setDescription(sourceIssue.getDescription());
+
+            // 状态：使用跟踪器的默认状态（新任务应该从初始状态开始）
+            Tracker tracker = trackerMapper.selectById(sourceIssue.getTrackerId());
+            Integer statusId = null;
+            if (tracker != null && tracker.getDefaultStatusId() != null) {
+                statusId = tracker.getDefaultStatusId().intValue();
+            } else {
+                // 获取第一个可用状态
+                List<IssueStatus> statuses = issueStatusMapper.selectList(
+                        new LambdaQueryWrapper<IssueStatus>()
+                                .orderByAsc(IssueStatus::getPosition)
+                                .orderByAsc(IssueStatus::getId)
+                                .last("LIMIT 1"));
+                if (!statuses.isEmpty()) {
+                    statusId = statuses.get(0).getId();
+                }
+            }
+            if (statusId == null) {
+                log.error("系统中没有可用的任务状态");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统中没有可用的任务状态");
+            }
+            newIssue.setStatusId(statusId);
+
+            newIssue.setPriorityId(sourceIssue.getPriorityId());
+
+            // 指派人：如果源任务有指派人，复制；否则设置为当前用户
+            if (sourceIssue.getAssignedToId() != null) {
+                // 验证指派人是否存在
+                User assignedUser = userMapper.selectById(sourceIssue.getAssignedToId());
+                if (assignedUser != null) {
+                    newIssue.setAssignedToId(sourceIssue.getAssignedToId());
+                } else {
+                    newIssue.setAssignedToId(currentUserId);
+                }
+            } else {
+                newIssue.setAssignedToId(currentUserId);
+            }
+
+            // 分类：如果跨项目复制，需要验证分类是否属于目标项目
+            if (sourceIssue.getCategoryId() != null && !targetProjectId.equals(sourceIssue.getProjectId())) {
+                // 跨项目复制，不复制分类（分类是项目级别的）
+                newIssue.setCategoryId(null);
+            } else {
+                newIssue.setCategoryId(sourceIssue.getCategoryId());
+            }
+
+            // 版本：如果跨项目复制，不复制版本（版本是项目级别的）
+            if (sourceIssue.getFixedVersionId() != null && !targetProjectId.equals(sourceIssue.getProjectId())) {
+                newIssue.setFixedVersionId(null);
+            } else {
+                newIssue.setFixedVersionId(sourceIssue.getFixedVersionId());
+            }
+
+            newIssue.setStartDate(sourceIssue.getStartDate());
+            newIssue.setDueDate(sourceIssue.getDueDate());
+            newIssue.setEstimatedHours(sourceIssue.getEstimatedHours());
+            // 完成度重置为 0（新任务）
+            newIssue.setDoneRatio(0);
+            // 父任务：不复制（新任务没有父任务）
+            newIssue.setParentId(null);
+            newIssue.setIsPrivate(sourceIssue.getIsPrivate() != null ? sourceIssue.getIsPrivate() : false);
+
+            // 设置创建者和时间
+            newIssue.setAuthorId(currentUserId);
+            newIssue.setLockVersion(0);
+            LocalDateTime now = LocalDateTime.now();
+            newIssue.setCreatedOn(now);
+            newIssue.setUpdatedOn(now);
+            // 关闭时间重置为 null（新任务）
+            newIssue.setClosedOn(null);
+
+            // TODO: 处理树形结构（parent_id, root_id, lft, rgt）
+            // 暂时设置为 null，后续实现树形结构逻辑
+
+            // 保存新任务
+            int insertResult = issueMapper.insert(newIssue);
+            if (insertResult <= 0) {
+                log.error("任务复制失败，插入数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务复制失败");
+            }
+
+            Long newIssueId = newIssue.getId();
+            log.info("任务复制成功，源任务ID: {}, 新任务ID: {}", sourceIssueId, newIssueId);
+
+            // 复制子任务（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyChildren())) {
+                LambdaQueryWrapper<Issue> childrenQuery = new LambdaQueryWrapper<>();
+                childrenQuery.eq(Issue::getParentId, sourceIssueId);
+                List<Issue> children = issueMapper.selectList(childrenQuery);
+                for (Issue child : children) {
+                    // 递归复制子任务
+                    IssueCopyRequestDTO childCopyRequest = new IssueCopyRequestDTO();
+                    childCopyRequest.setTargetProjectId(targetProjectId);
+                    childCopyRequest.setCopyChildren(true); // 递归复制子任务的子任务
+                    childCopyRequest.setCopyRelations(requestDTO.getCopyRelations());
+                    childCopyRequest.setCopyWatchers(requestDTO.getCopyWatchers());
+                    childCopyRequest.setCopyJournals(requestDTO.getCopyJournals());
+                    IssueDetailResponseDTO copiedChild = copyIssue(child.getId(), childCopyRequest);
+                    // 设置新任务的父任务ID
+                    Issue copiedChildIssue = issueMapper.selectById(copiedChild.getId());
+                    if (copiedChildIssue != null) {
+                        copiedChildIssue.setParentId(newIssueId);
+                        issueMapper.updateById(copiedChildIssue);
+                    }
+                }
+                log.info("子任务复制成功，源任务ID: {}, 子任务数量: {}", sourceIssueId, children.size());
+            }
+
+            // 复制关联关系（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyRelations())) {
+                LambdaQueryWrapper<IssueRelation> relationQuery = new LambdaQueryWrapper<>();
+                relationQuery.and(wrapper -> wrapper
+                        .eq(IssueRelation::getIssueFromId, sourceIssueId.intValue())
+                        .or()
+                        .eq(IssueRelation::getIssueToId, sourceIssueId.intValue()));
+                List<IssueRelation> relations = issueRelationMapper.selectList(relationQuery);
+                for (IssueRelation relation : relations) {
+                    IssueRelation newRelation = new IssueRelation();
+                    // 确定关联的源任务和目标任务
+                    if (relation.getIssueFromId().equals(sourceIssueId.intValue())) {
+                        // 源任务是关联的源，目标任务保持不变（如果目标任务存在）
+                        newRelation.setIssueFromId(newIssueId.intValue());
+                        newRelation.setIssueToId(relation.getIssueToId());
+                    } else {
+                        // 源任务是关联的目标，源任务保持不变（如果源任务存在）
+                        newRelation.setIssueFromId(relation.getIssueFromId());
+                        newRelation.setIssueToId(newIssueId.intValue());
+                    }
+                    newRelation.setRelationType(relation.getRelationType());
+                    newRelation.setDelay(relation.getDelay());
+                    issueRelationMapper.insert(newRelation);
+                }
+                log.info("任务关联复制成功，源任务ID: {}, 关联数量: {}", sourceIssueId, relations.size());
+            }
+
+            // 复制关注者（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyWatchers())) {
+                LambdaQueryWrapper<Watcher> watcherQuery = new LambdaQueryWrapper<>();
+                watcherQuery.eq(Watcher::getWatchableType, "Issue")
+                        .eq(Watcher::getWatchableId, sourceIssueId.intValue());
+                List<Watcher> watchers = watcherMapper.selectList(watcherQuery);
+                for (Watcher watcher : watchers) {
+                    // 检查是否已存在（避免重复）
+                    LambdaQueryWrapper<Watcher> checkQuery = new LambdaQueryWrapper<>();
+                    checkQuery.eq(Watcher::getWatchableType, "Issue")
+                            .eq(Watcher::getWatchableId, newIssueId.intValue())
+                            .eq(Watcher::getUserId, watcher.getUserId());
+                    Watcher existing = watcherMapper.selectOne(checkQuery);
+                    if (existing == null) {
+                        Watcher newWatcher = new Watcher();
+                        newWatcher.setWatchableType("Issue");
+                        newWatcher.setWatchableId(newIssueId.intValue());
+                        newWatcher.setUserId(watcher.getUserId());
+                        watcherMapper.insert(newWatcher);
+                    }
+                }
+                log.info("任务关注者复制成功，源任务ID: {}, 关注者数量: {}", sourceIssueId, watchers.size());
+            }
+
+            // 复制评论/活动日志（如果启用）
+            if (Boolean.TRUE.equals(requestDTO.getCopyJournals())) {
+                LambdaQueryWrapper<Journal> journalQuery = new LambdaQueryWrapper<>();
+                journalQuery.eq(Journal::getJournalizedId, sourceIssueId.intValue())
+                        .eq(Journal::getJournalizedType, "Issue");
+                List<Journal> journals = journalMapper.selectList(journalQuery);
+                for (Journal journal : journals) {
+                    Journal newJournal = new Journal();
+                    newJournal.setJournalizedId(newIssueId.intValue());
+                    newJournal.setJournalizedType("Issue");
+                    newJournal.setUserId(journal.getUserId());
+                    newJournal.setNotes(journal.getNotes());
+                    newJournal.setPrivateNotes(journal.getPrivateNotes());
+                    newJournal.setCreatedOn(LocalDateTime.now());
+                    newJournal.setUpdatedOn(LocalDateTime.now());
+                    journalMapper.insert(newJournal);
+                }
+                log.info("任务评论复制成功，源任务ID: {}, 评论数量: {}", sourceIssueId, journals.size());
+            }
+
+            // 查询新创建的任务（包含关联信息）
+            return getIssueDetailById(newIssueId);
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务复制失败，源任务ID: {}", sourceIssueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务复制失败");
         } finally {
             MDC.clear();
         }
