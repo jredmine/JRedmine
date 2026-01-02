@@ -25,6 +25,7 @@ import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueCategory;
 import com.github.jredmine.entity.IssueRelation;
@@ -59,7 +60,9 @@ import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.user.MemberRoleMapper;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -1011,6 +1014,309 @@ public class IssueService {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务删除失败");
         } finally {
             MDC.clear();
+        }
+    }
+
+    /**
+     * 获取任务树
+     *
+     * @param projectId 项目ID（可选，如果不指定，返回所有项目的任务树）
+     * @param rootId    根任务ID（可选，如果不指定，返回所有顶级任务）
+     * @return 任务树列表
+     */
+    public List<IssueTreeNodeResponseDTO> getIssueTree(Long projectId, Long rootId) {
+        MDC.put("operation", "get_issue_tree");
+        if (projectId != null) {
+            MDC.put("projectId", String.valueOf(projectId));
+        }
+        if (rootId != null) {
+            MDC.put("rootId", String.valueOf(rootId));
+        }
+
+        try {
+            log.debug("开始查询任务树，项目ID: {}, 根任务ID: {}", projectId, rootId);
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 构建查询条件
+            LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+
+            // 如果指定了项目ID，验证项目是否存在并过滤
+            if (projectId != null) {
+                Project project = projectMapper.selectById(projectId);
+                if (project == null) {
+                    log.warn("项目不存在，项目ID: {}", projectId);
+                    throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+                }
+
+                // 验证用户是否有权限访问项目
+                if (!isAdmin) {
+                    if (!projectPermissionService.hasPermission(currentUserId, projectId, "view_issues")) {
+                        log.warn("用户无权限查看项目任务，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看项目任务，需要 view_issues 权限");
+                    }
+                }
+
+                queryWrapper.eq(Issue::getProjectId, projectId);
+            } else {
+                // 如果没有指定项目ID，需要根据权限过滤项目
+                if (!isAdmin) {
+                    // 获取当前用户是成员的项目ID集合
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getUserId, currentUserId);
+                    List<Member> members = memberMapper.selectList(memberQuery);
+                    Set<Long> memberProjectIds = members.stream()
+                            .map(Member::getProjectId)
+                            .collect(Collectors.toSet());
+
+                    // 获取公开项目ID集合
+                    LambdaQueryWrapper<Project> projectQuery = new LambdaQueryWrapper<>();
+                    projectQuery.eq(Project::getIsPublic, true);
+                    List<Project> publicProjects = projectMapper.selectList(projectQuery);
+                    Set<Long> publicProjectIds = publicProjects.stream()
+                            .map(Project::getId)
+                            .collect(Collectors.toSet());
+
+                    // 合并项目ID集合
+                    Set<Long> accessibleProjectIds = new java.util.HashSet<>();
+                    accessibleProjectIds.addAll(memberProjectIds);
+                    accessibleProjectIds.addAll(publicProjectIds);
+
+                    if (accessibleProjectIds.isEmpty()) {
+                        // 用户没有任何可访问的项目，返回空列表
+                        log.info("用户无任何可访问的项目，用户ID: {}", currentUserId);
+                        return List.of();
+                    }
+
+                    queryWrapper.in(Issue::getProjectId, accessibleProjectIds);
+                }
+            }
+
+            // 如果指定了根任务ID，验证根任务是否存在
+            if (rootId != null) {
+                Issue rootIssue = issueMapper.selectById(rootId);
+                if (rootIssue == null) {
+                    log.warn("根任务不存在，根任务ID: {}", rootId);
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "根任务不存在");
+                }
+
+                // 验证用户是否有权限访问根任务
+                if (!isAdmin) {
+                    if (!projectPermissionService.hasPermission(currentUserId, rootIssue.getProjectId(),
+                            "view_issues")) {
+                        log.warn("用户无权限查看根任务，根任务ID: {}, 项目ID: {}, 用户ID: {}",
+                                rootId, rootIssue.getProjectId(), currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看根任务，需要 view_issues 权限");
+                    }
+                }
+
+                // 查询以根任务为根的子树（使用 lft 和 rgt，如果可用）
+                // 如果 lft 和 rgt 为空，则使用 parent_id 递归查询
+                if (rootIssue.getLft() != null && rootIssue.getRgt() != null) {
+                    // 使用嵌套集合模型查询
+                    queryWrapper.ge(Issue::getLft, rootIssue.getLft())
+                            .le(Issue::getRgt, rootIssue.getRgt());
+                } else {
+                    // 使用 parent_id 递归查询（需要查询所有任务，然后在内存中构建树）
+                    // 这里先查询所有任务，然后过滤
+                }
+            }
+
+            // 按 ID 排序
+            queryWrapper.orderByAsc(Issue::getId);
+
+            // 执行查询
+            List<Issue> allIssues = issueMapper.selectList(queryWrapper);
+
+            // 如果指定了根任务ID且使用 parent_id，需要过滤出子树
+            if (rootId != null) {
+                // 检查根任务是否使用了 lft/rgt
+                Issue rootIssue = issueMapper.selectById(rootId);
+                if (rootIssue.getLft() == null || rootIssue.getRgt() == null) {
+                    // 收集所有需要包含的任务ID（包括根任务及其所有子孙任务）
+                    Set<Long> includeIssueIds = new java.util.HashSet<>();
+                    includeIssueIds.add(rootId);
+                    collectDescendantIssueIds(allIssues, rootId, includeIssueIds);
+
+                    // 过滤出子树任务
+                    allIssues = allIssues.stream()
+                            .filter(i -> includeIssueIds.contains(i.getId()))
+                            .toList();
+                }
+            }
+
+            // 权限过滤：私有任务仅项目成员可见
+            List<Issue> filteredIssues = new ArrayList<>();
+            for (Issue issue : allIssues) {
+                // 检查私有任务权限
+                if (Boolean.TRUE.equals(issue.getIsPrivate()) && !isAdmin) {
+                    // 检查用户是否是项目成员
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getUserId, currentUserId)
+                            .eq(Member::getProjectId, issue.getProjectId());
+                    Member member = memberMapper.selectOne(memberQuery);
+                    if (member == null) {
+                        // 不是项目成员，跳过私有任务
+                        continue;
+                    }
+                }
+                filteredIssues.add(issue);
+            }
+
+            // 构建树形结构
+            List<IssueTreeNodeResponseDTO> tree = buildIssueTree(filteredIssues, rootId);
+
+            MDC.put("count", String.valueOf(tree.size()));
+            log.info("任务树查询成功，项目ID: {}, 根任务ID: {}, 共查询到 {} 个根节点", projectId, rootId, tree.size());
+
+            return tree;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务树查询失败，项目ID: {}, 根任务ID: {}", projectId, rootId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务树查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 递归收集所有子孙任务ID
+     *
+     * @param allIssues 所有任务列表
+     * @param parentId  父任务ID
+     * @param result    结果集合
+     */
+    private void collectDescendantIssueIds(List<Issue> allIssues, Long parentId, Set<Long> result) {
+        for (Issue issue : allIssues) {
+            if (parentId.equals(issue.getParentId())) {
+                result.add(issue.getId());
+                collectDescendantIssueIds(allIssues, issue.getId(), result);
+            }
+        }
+    }
+
+    /**
+     * 构建任务树形结构
+     *
+     * @param allIssues 所有任务列表
+     * @param rootId    根任务ID（如果为null，返回所有顶级任务）
+     * @return 任务树列表
+     */
+    private List<IssueTreeNodeResponseDTO> buildIssueTree(List<Issue> allIssues, Long rootId) {
+        // 将任务列表转换为 Map，便于查找
+        Map<Long, IssueTreeNodeResponseDTO> nodeMap = new HashMap<>();
+        for (Issue issue : allIssues) {
+            IssueTreeNodeResponseDTO node = toIssueTreeNodeResponseDTO(issue);
+            node.setChildren(new ArrayList<>());
+            nodeMap.put(issue.getId(), node);
+        }
+
+        // 构建树形结构
+        List<IssueTreeNodeResponseDTO> roots = new ArrayList<>();
+        for (Issue issue : allIssues) {
+            IssueTreeNodeResponseDTO node = nodeMap.get(issue.getId());
+            Long parentId = issue.getParentId();
+
+            if (parentId == null) {
+                // 顶级任务
+                if (rootId == null || issue.getId().equals(rootId)) {
+                    roots.add(node);
+                }
+            } else {
+                // 有父任务的任务
+                IssueTreeNodeResponseDTO parentNode = nodeMap.get(parentId);
+                if (parentNode != null) {
+                    // 父节点在列表中，添加到父节点的子节点列表
+                    parentNode.getChildren().add(node);
+                } else {
+                    // 父节点不在列表中（可能是权限过滤导致的），作为根节点处理
+                    if (rootId == null) {
+                        roots.add(node);
+                    }
+                }
+            }
+        }
+
+        // 如果指定了根任务ID，返回根任务节点（包含子树）
+        if (rootId != null) {
+            IssueTreeNodeResponseDTO rootNode = nodeMap.get(rootId);
+            if (rootNode != null) {
+                return List.of(rootNode);
+            }
+            // 如果根任务不在列表中，返回空列表
+            return List.of();
+        }
+
+        return roots;
+    }
+
+    /**
+     * 将 Issue 实体转换为 IssueTreeNodeResponseDTO
+     *
+     * @param issue 任务实体
+     * @return 响应 DTO
+     */
+    private IssueTreeNodeResponseDTO toIssueTreeNodeResponseDTO(Issue issue) {
+        IssueTreeNodeResponseDTO dto = new IssueTreeNodeResponseDTO();
+        dto.setId(issue.getId());
+        dto.setTrackerId(issue.getTrackerId());
+        dto.setProjectId(issue.getProjectId());
+        dto.setSubject(issue.getSubject());
+        dto.setStatusId(issue.getStatusId());
+        dto.setAssignedToId(issue.getAssignedToId());
+        dto.setAuthorId(issue.getAuthorId());
+        dto.setParentId(issue.getParentId());
+        dto.setRootId(issue.getRootId());
+        dto.setCreatedOn(issue.getCreatedOn());
+        dto.setUpdatedOn(issue.getUpdatedOn());
+        dto.setDueDate(issue.getDueDate());
+        dto.setDoneRatio(issue.getDoneRatio());
+        dto.setIsPrivate(issue.getIsPrivate());
+
+        // 填充关联信息
+        fillTreeNodeRelatedInfo(dto, issue);
+
+        return dto;
+    }
+
+    /**
+     * 填充树节点关联信息（项目名称、跟踪器名称、状态名称等）
+     */
+    private void fillTreeNodeRelatedInfo(IssueTreeNodeResponseDTO dto, Issue issue) {
+        // 填充项目信息
+        Project project = projectMapper.selectById(issue.getProjectId());
+        if (project != null) {
+            dto.setProjectName(project.getName());
+        }
+
+        // 填充跟踪器信息
+        Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+        if (tracker != null) {
+            dto.setTrackerName(tracker.getName());
+        }
+
+        // 填充状态信息
+        IssueStatus status = issueStatusMapper.selectById(issue.getStatusId());
+        if (status != null) {
+            dto.setStatusName(status.getName());
+        }
+
+        // 填充创建者信息
+        User author = userMapper.selectById(issue.getAuthorId());
+        if (author != null) {
+            dto.setAuthorName(author.getLogin());
+        }
+
+        // 填充指派人信息
+        if (issue.getAssignedToId() != null) {
+            User assignedUser = userMapper.selectById(issue.getAssignedToId());
+            if (assignedUser != null) {
+                dto.setAssignedToName(assignedUser.getLogin());
+            }
         }
     }
 
