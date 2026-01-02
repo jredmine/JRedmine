@@ -12,6 +12,7 @@ import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueJournalCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueJournalListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
@@ -270,9 +271,13 @@ public class IssueService {
         MDC.put("operation", "list_issues");
 
         try {
-            // 设置默认值
-            Integer current = requestDTO.getCurrent() != null ? requestDTO.getCurrent() : 1;
-            Integer size = requestDTO.getSize() != null ? requestDTO.getSize() : 10;
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer current = requestDTO.getCurrent() != null && requestDTO.getCurrent() > 0
+                    ? requestDTO.getCurrent()
+                    : 1;
+            Integer size = requestDTO.getSize() != null && requestDTO.getSize() > 0
+                    ? requestDTO.getSize()
+                    : 10;
             String sortOrder = requestDTO.getSortOrder() != null ? requestDTO.getSortOrder() : "desc";
 
             log.debug("开始查询任务列表，页码: {}, 每页数量: {}", current, size);
@@ -1756,6 +1761,144 @@ public class IssueService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * 获取任务活动日志列表
+     *
+     * @param issueId    任务ID
+     * @param requestDTO 查询请求参数
+     * @return 分页响应
+     */
+    public PageResponse<IssueJournalResponseDTO> listIssueJournals(Long issueId,
+            IssueJournalListRequestDTO requestDTO) {
+        MDC.put("operation", "list_issue_journals");
+        MDC.put("issueId", String.valueOf(issueId));
+
+        try {
+            // 设置默认值并验证：current 至少为 1，size 至少为 10
+            Integer current = requestDTO.getCurrent() != null && requestDTO.getCurrent() > 0
+                    ? requestDTO.getCurrent()
+                    : 1;
+            Integer size = requestDTO.getSize() != null && requestDTO.getSize() > 0
+                    ? requestDTO.getSize()
+                    : 10;
+
+            log.debug("开始查询任务活动日志列表，任务ID: {}, 页码: {}, 每页数量: {}", issueId, current, size);
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+            }
+
+            // 检查用户是否是项目成员（用于过滤私有备注）
+            boolean isProjectMember = isAdmin;
+            if (!isProjectMember) {
+                LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                memberQuery.eq(Member::getUserId, currentUserId)
+                        .eq(Member::getProjectId, issue.getProjectId());
+                Member member = memberMapper.selectOne(memberQuery);
+                isProjectMember = (member != null);
+            }
+
+            // 创建分页对象
+            Page<Journal> page = new Page<>(current, size);
+
+            // 构建查询条件
+            LambdaQueryWrapper<Journal> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Journal::getJournalizedId, issueId.intValue())
+                    .eq(Journal::getJournalizedType, "Issue");
+
+            // 过滤私有备注：如果不是项目成员，只显示公开评论
+            if (!isProjectMember) {
+                queryWrapper.and(wrapper -> wrapper
+                        .eq(Journal::getPrivateNotes, false)
+                        .or()
+                        .isNull(Journal::getPrivateNotes));
+            }
+
+            // 按创建时间倒序排序（最新的在前）
+            queryWrapper.orderByDesc(Journal::getCreatedOn)
+                    .orderByDesc(Journal::getId);
+
+            // 执行分页查询
+            Page<Journal> result = journalMapper.selectPage(page, queryWrapper);
+
+            MDC.put("total", String.valueOf(result.getTotal()));
+            log.info("任务活动日志列表查询成功，任务ID: {}, 共查询到 {} 条记录", issueId, result.getTotal());
+
+            // 转换为响应 DTO
+            List<IssueJournalResponseDTO> dtoList = result.getRecords().stream()
+                    .map(journal -> toIssueJournalResponseDTO(journal, issueId))
+                    .toList();
+
+            return PageResponse.of(
+                    dtoList,
+                    (int) result.getTotal(),
+                    (int) result.getCurrent(),
+                    (int) result.getSize());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务活动日志列表查询失败，任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务活动日志列表查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 将 Journal 实体转换为 IssueJournalResponseDTO
+     *
+     * @param journal 活动日志实体
+     * @param issueId 任务ID
+     * @return 响应 DTO
+     */
+    private IssueJournalResponseDTO toIssueJournalResponseDTO(Journal journal, Long issueId) {
+        IssueJournalResponseDTO dto = new IssueJournalResponseDTO();
+        dto.setId(journal.getId());
+        dto.setIssueId(issueId);
+        dto.setNotes(journal.getNotes());
+        dto.setCreatedOn(journal.getCreatedOn());
+        dto.setUpdatedOn(journal.getUpdatedOn());
+        dto.setPrivateNotes(journal.getPrivateNotes());
+
+        // 填充作者信息
+        if (journal.getUserId() != null) {
+            dto.setUserId(journal.getUserId().longValue());
+            User author = userMapper.selectById(journal.getUserId().longValue());
+            if (author != null) {
+                dto.setUserName(author.getLogin());
+            }
+        }
+
+        // 填充更新者信息
+        if (journal.getUpdatedById() != null) {
+            dto.setUpdatedById(journal.getUpdatedById().longValue());
+            User updatedBy = userMapper.selectById(journal.getUpdatedById().longValue());
+            if (updatedBy != null) {
+                dto.setUpdatedByName(updatedBy.getLogin());
+            }
+        }
+
+        return dto;
     }
 
     /**

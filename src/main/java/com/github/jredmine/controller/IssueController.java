@@ -7,6 +7,7 @@ import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueJournalCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueJournalListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
@@ -133,6 +134,16 @@ public class IssueController {
             @Valid @RequestBody IssueJournalCreateRequestDTO requestDTO) {
         IssueJournalResponseDTO result = issueService.createIssueJournal(id, requestDTO);
         return ApiResponse.success("任务评论创建成功", result);
+    }
+
+    @Operation(summary = "获取任务活动日志列表", description = "分页查询任务的活动日志（包括评论、状态变更等）。私有备注只有项目成员可见。需要认证，需要 view_issues 权限或系统管理员。按创建时间倒序排序（最新的在前）。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/{id}/journals")
+    public ApiResponse<PageResponse<IssueJournalResponseDTO>> listIssueJournals(
+            @PathVariable Long id,
+            IssueJournalListRequestDTO requestDTO) {
+        PageResponse<IssueJournalResponseDTO> result = issueService.listIssueJournals(id, requestDTO);
+        return ApiResponse.success(result);
     }
 
     @Operation(summary = "更新任务", description = "更新任务信息。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。如果状态改变，需要遵循工作流规则。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))
