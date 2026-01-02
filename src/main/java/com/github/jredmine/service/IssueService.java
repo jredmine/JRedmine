@@ -1015,6 +1015,96 @@ public class IssueService {
     }
 
     /**
+     * 获取任务可用的状态转换
+     *
+     * @param issueId 任务ID
+     * @return 可用的状态转换
+     */
+    public WorkflowTransitionResponseDTO getIssueAvailableTransitions(Long issueId) {
+        MDC.put("operation", "get_issue_available_transitions");
+        MDC.put("issueId", String.valueOf(issueId));
+
+        try {
+            log.debug("开始查询任务可用的状态转换，任务ID: {}", issueId);
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+            }
+
+            // 获取用户在项目中的角色ID列表
+            List<Integer> userRoleIds = getUserProjectRoleIds(currentUserId, issue.getProjectId());
+
+            // 获取可用的状态转换（基于工作流规则）
+            WorkflowTransitionResponseDTO availableTransitions = workflowService.getAvailableTransitions(
+                    issue.getTrackerId(),
+                    issue.getStatusId(),
+                    userRoleIds.isEmpty() ? null : userRoleIds);
+
+            // 根据任务的指派人、创建者等信息，过滤当前用户无法执行的转换
+            List<AvailableTransitionDTO> filteredTransitions = new ArrayList<>();
+            for (AvailableTransitionDTO transition : availableTransitions.getAvailableTransitions()) {
+                // 检查指派人限制
+                if (Boolean.TRUE.equals(transition.getAssignee())) {
+                    // 如果转换需要指派人权限，但当前用户不是指派人，则跳过
+                    if (issue.getAssignedToId() == null || !issue.getAssignedToId().equals(currentUserId)) {
+                        log.debug("跳过需要指派人权限的转换，任务ID: {}, 状态ID: {}, 指派人ID: {}, 当前用户ID: {}",
+                                issueId, transition.getStatusId(), issue.getAssignedToId(), currentUserId);
+                        continue;
+                    }
+                }
+
+                // 检查创建者限制
+                if (Boolean.TRUE.equals(transition.getAuthor())) {
+                    // 如果转换需要创建者权限，但当前用户不是创建者，则跳过
+                    if (issue.getAuthorId() == null || !issue.getAuthorId().equals(currentUserId)) {
+                        log.debug("跳过需要创建者权限的转换，任务ID: {}, 状态ID: {}, 创建者ID: {}, 当前用户ID: {}",
+                                issueId, transition.getStatusId(), issue.getAuthorId(), currentUserId);
+                        continue;
+                    }
+                }
+
+                // 如果通过了所有限制检查，添加到可用转换列表
+                filteredTransitions.add(transition);
+            }
+
+            // 构建响应（使用过滤后的转换列表）
+            WorkflowTransitionResponseDTO response = WorkflowTransitionResponseDTO.builder()
+                    .currentStatusId(availableTransitions.getCurrentStatusId())
+                    .currentStatusName(availableTransitions.getCurrentStatusName())
+                    .availableTransitions(filteredTransitions)
+                    .build();
+
+            log.info("查询任务可用的状态转换成功，任务ID: {}, 可用转换数量: {}", issueId, filteredTransitions.size());
+            return response;
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("查询任务可用的状态转换失败，任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "查询任务可用的状态转换失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
      * 复制任务
      *
      * @param sourceIssueId 源任务ID

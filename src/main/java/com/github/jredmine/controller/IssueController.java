@@ -17,6 +17,7 @@ import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
+import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.service.IssueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -85,6 +86,14 @@ public class IssueController {
     @GetMapping("/{id}")
     public ApiResponse<IssueDetailResponseDTO> getIssueById(@PathVariable Long id) {
         IssueDetailResponseDTO result = issueService.getIssueDetailById(id);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取任务可用的状态转换", description = "根据任务的工作流规则和用户权限，返回当前用户可以执行的状态转换列表。会过滤掉需要指派人或创建者权限但当前用户不满足条件的转换。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/{id}/transitions")
+    public ApiResponse<WorkflowTransitionResponseDTO> getIssueAvailableTransitions(@PathVariable Long id) {
+        WorkflowTransitionResponseDTO result = issueService.getIssueAvailableTransitions(id);
         return ApiResponse.success(result);
     }
 
