@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueBatchUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueRelationCreateRequestDTO;
@@ -154,6 +155,15 @@ public class IssueController {
             @Valid @RequestBody IssueUpdateRequestDTO requestDTO) {
         IssueDetailResponseDTO result = issueService.updateIssue(id, requestDTO);
         return ApiResponse.success("任务更新成功", result);
+    }
+
+    @Operation(summary = "批量更新任务", description = "批量更新多个任务的相同字段。支持部分更新（只更新提供的字段）。需要认证，需要 edit_issues 权限或系统管理员。所有任务必须全部更新成功，否则全部回滚。使用乐观锁防止并发更新冲突。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
+    @PutMapping("/batch")
+    public ApiResponse<List<IssueDetailResponseDTO>> batchUpdateIssues(
+            @Valid @RequestBody IssueBatchUpdateRequestDTO requestDTO) {
+        List<IssueDetailResponseDTO> result = issueService.batchUpdateIssues(requestDTO);
+        return ApiResponse.success("批量更新任务成功", result);
     }
 
     @Operation(summary = "更新任务状态", description = "更新任务状态，完整支持工作流验证。需要认证，需要 edit_issues 权限或系统管理员。会验证工作流规则（状态转换是否允许）、用户角色权限、指派人/创建者限制。如果状态是关闭状态，自动设置 closed_on 和 done_ratio = 100。支持添加备注/评论。", security = @SecurityRequirement(name = "bearerAuth"))

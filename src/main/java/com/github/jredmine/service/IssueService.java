@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueBatchUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
@@ -676,142 +677,8 @@ public class IssueService {
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
             }
 
-            // 处理状态更新（如果提供）
-            if (requestDTO.getStatusId() != null && !requestDTO.getStatusId().equals(issue.getStatusId())) {
-                Integer newStatusId = requestDTO.getStatusId();
-
-                // 验证新状态是否存在
-                IssueStatus newStatus = issueStatusMapper.selectById(newStatusId);
-                if (newStatus == null) {
-                    log.warn("任务状态不存在，状态ID: {}", newStatusId);
-                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态不存在");
-                }
-
-                // TODO: 验证工作流规则（状态转换是否允许）
-                // 需要检查用户角色、指派人限制、创建者限制等
-                // 暂时跳过，后续实现完整的工作流验证
-
-                // 如果新状态是关闭状态，自动设置关闭时间和完成度
-                if (Boolean.TRUE.equals(newStatus.getIsClosed())) {
-                    issue.setClosedOn(LocalDateTime.now());
-                    if (issue.getDoneRatio() == null || issue.getDoneRatio() < 100) {
-                        issue.setDoneRatio(100);
-                    }
-                } else {
-                    // 如果从关闭状态转换到非关闭状态，清除关闭时间
-                    if (Boolean.TRUE.equals(issue.getStatusId() != null)) {
-                        IssueStatus oldStatus = issueStatusMapper.selectById(issue.getStatusId());
-                        if (oldStatus != null && Boolean.TRUE.equals(oldStatus.getIsClosed())) {
-                            issue.setClosedOn(null);
-                        }
-                    }
-                }
-
-                issue.setStatusId(newStatusId);
-            }
-
-            // 处理指派人更新（如果提供）
-            Long assignedToId = requestDTO.getAssignedToId();
-            if (assignedToId != null) {
-                if (assignedToId == 0) {
-                    // 取消分配
-                    issue.setAssignedToId(null);
-                } else {
-                    // 验证指派人是否存在
-                    User assignedUser = userMapper.selectById(assignedToId);
-                    if (assignedUser == null) {
-                        log.warn("指派人不存在，用户ID: {}", assignedToId);
-                        throw new BusinessException(ResultCode.USER_NOT_FOUND);
-                    }
-                    issue.setAssignedToId(assignedToId);
-                }
-            }
-
-            // 处理父任务更新（如果提供）
-            Long parentId = requestDTO.getParentId();
-            if (parentId != null) {
-                if (parentId == 0) {
-                    // 取消父任务
-                    issue.setParentId(null);
-                } else {
-                    // 验证父任务是否存在
-                    Issue parentIssue = issueMapper.selectById(parentId);
-                    if (parentIssue == null) {
-                        log.warn("父任务不存在，父任务ID: {}", parentId);
-                        throw new BusinessException(ResultCode.SYSTEM_ERROR, "父任务不存在");
-                    }
-                    // 验证父任务是否属于同一项目
-                    if (!parentIssue.getProjectId().equals(issue.getProjectId())) {
-                        log.warn("父任务不属于同一项目，父任务ID: {}, 项目ID: {}", parentId, issue.getProjectId());
-                        throw new BusinessException(ResultCode.SYSTEM_ERROR, "父任务必须属于同一项目");
-                    }
-                    // 不能将任务设置为自己的父任务
-                    if (parentId.equals(id)) {
-                        log.warn("不能将任务设置为自己的父任务，任务ID: {}", id);
-                        throw new BusinessException(ResultCode.SYSTEM_ERROR, "不能将任务设置为自己的父任务");
-                    }
-                    issue.setParentId(parentId);
-                }
-            }
-
-            // 处理分类更新（如果提供）
-            Integer categoryId = requestDTO.getCategoryId();
-            if (categoryId != null) {
-                if (categoryId == 0) {
-                    // 取消分类
-                    issue.setCategoryId(null);
-                } else {
-                    // 验证分类是否存在
-                    IssueCategory category = issueCategoryMapper.selectById(categoryId);
-                    if (category == null) {
-                        log.warn("任务分类不存在，分类ID: {}", categoryId);
-                        throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类不存在");
-                    }
-                    // 验证分类是否属于该项目
-                    if (!category.getProjectId().equals(issue.getProjectId().intValue())) {
-                        log.warn("任务分类不属于该项目，项目ID: {}, 分类ID: {}, 分类所属项目ID: {}",
-                                issue.getProjectId(), categoryId, category.getProjectId());
-                        throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
-                    }
-                    issue.setCategoryId(categoryId);
-                }
-            }
-
-            // 处理版本更新（如果提供）
-            Long fixedVersionId = requestDTO.getFixedVersionId();
-            if (fixedVersionId != null) {
-                issue.setFixedVersionId((fixedVersionId == 0) ? null : fixedVersionId);
-            }
-
-            // 更新其他字段
-            if (requestDTO.getSubject() != null) {
-                issue.setSubject(requestDTO.getSubject());
-            }
-            if (requestDTO.getDescription() != null) {
-                issue.setDescription(requestDTO.getDescription());
-            }
-            if (requestDTO.getPriorityId() != null) {
-                issue.setPriorityId(requestDTO.getPriorityId());
-            }
-            if (requestDTO.getStartDate() != null) {
-                issue.setStartDate(requestDTO.getStartDate());
-            }
-            if (requestDTO.getDueDate() != null) {
-                issue.setDueDate(requestDTO.getDueDate());
-            }
-            if (requestDTO.getEstimatedHours() != null) {
-                issue.setEstimatedHours(requestDTO.getEstimatedHours());
-            }
-            if (requestDTO.getDoneRatio() != null) {
-                if (requestDTO.getDoneRatio() < 0 || requestDTO.getDoneRatio() > 100) {
-                    log.warn("完成度无效，完成度: {}", requestDTO.getDoneRatio());
-                    throw new BusinessException(ResultCode.PARAM_INVALID, "完成度必须在 0-100 之间");
-                }
-                issue.setDoneRatio(requestDTO.getDoneRatio());
-            }
-            if (requestDTO.getIsPrivate() != null) {
-                issue.setIsPrivate(requestDTO.getIsPrivate());
-            }
+            // 应用更新数据（复用公共逻辑）
+            applyUpdateToIssue(issue, requestDTO);
 
             // 更新乐观锁版本号和更新时间
             issue.setLockVersion(issue.getLockVersion() + 1);
@@ -838,6 +705,244 @@ public class IssueService {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务更新失败");
         } finally {
             MDC.clear();
+        }
+    }
+
+    /**
+     * 批量更新任务
+     *
+     * @param requestDTO 批量更新请求
+     * @return 更新后的任务详情列表
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public List<IssueDetailResponseDTO> batchUpdateIssues(IssueBatchUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "batch_update_issues");
+        MDC.put("issueCount", String.valueOf(requestDTO.getIssueIds().size()));
+
+        try {
+            log.info("开始批量更新任务，任务数量: {}", requestDTO.getIssueIds().size());
+
+            // 验证任务ID列表不能为空
+            if (requestDTO.getIssueIds() == null || requestDTO.getIssueIds().isEmpty()) {
+                log.warn("任务ID列表为空");
+                throw new BusinessException(ResultCode.PARAM_INVALID, "任务ID列表不能为空");
+            }
+
+            // 验证更新数据不能为空
+            if (requestDTO.getUpdateData() == null) {
+                log.warn("更新数据为空");
+                throw new BusinessException(ResultCode.PARAM_INVALID, "更新数据不能为空");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 批量查询所有任务
+            List<Issue> issues = issueMapper.selectBatchIds(requestDTO.getIssueIds());
+            if (issues.size() != requestDTO.getIssueIds().size()) {
+                log.warn("部分任务不存在，请求数量: {}, 实际查询到: {}",
+                        requestDTO.getIssueIds().size(), issues.size());
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "部分任务不存在");
+            }
+
+            // 验证用户对所有任务都有权限
+            if (!isAdmin) {
+                for (Issue issue : issues) {
+                    if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "edit_issues")) {
+                        log.warn("用户无权限更新任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                                issue.getId(), issue.getProjectId(), currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN,
+                                "无权限更新任务 ID: " + issue.getId() + "，需要 edit_issues 权限");
+                    }
+                }
+            }
+
+            // 批量更新所有任务
+            List<IssueDetailResponseDTO> resultList = new ArrayList<>();
+            for (Issue issue : issues) {
+                // 乐观锁检查（如果提供了 lockVersion）
+                if (requestDTO.getUpdateData().getLockVersion() != null
+                        && !requestDTO.getUpdateData().getLockVersion().equals(issue.getLockVersion())) {
+                    log.warn("任务已被其他用户修改，任务ID: {}, 当前版本: {}, 请求版本: {}",
+                            issue.getId(), issue.getLockVersion(), requestDTO.getUpdateData().getLockVersion());
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR,
+                            "任务 ID: " + issue.getId() + " 已被其他用户修改，请刷新后重试");
+                }
+
+                // 应用更新数据（复用单个更新的逻辑）
+                applyUpdateToIssue(issue, requestDTO.getUpdateData());
+
+                // 更新乐观锁版本号和更新时间
+                issue.setLockVersion(issue.getLockVersion() + 1);
+                issue.setUpdatedOn(LocalDateTime.now());
+
+                // 保存任务
+                int updateResult = issueMapper.updateById(issue);
+                if (updateResult <= 0) {
+                    log.error("任务更新失败，更新数据库失败，任务ID: {}", issue.getId());
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR,
+                            "任务 ID: " + issue.getId() + " 更新失败");
+                }
+
+                // 查询更新后的任务详情
+                IssueDetailResponseDTO detailDTO = getIssueDetailById(issue.getId());
+                resultList.add(detailDTO);
+            }
+
+            log.info("批量更新任务成功，任务数量: {}", resultList.size());
+            return resultList;
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("批量更新任务失败", e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "批量更新任务失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 将更新数据应用到任务实体（内部辅助方法）
+     * 提取自 updateIssue 方法的公共逻辑
+     *
+     * @param issue      任务实体
+     * @param requestDTO 更新请求
+     */
+    private void applyUpdateToIssue(Issue issue, IssueUpdateRequestDTO requestDTO) {
+        // 处理状态更新（如果提供）
+        if (requestDTO.getStatusId() != null && !requestDTO.getStatusId().equals(issue.getStatusId())) {
+            Integer newStatusId = requestDTO.getStatusId();
+
+            // 验证新状态是否存在
+            IssueStatus newStatus = issueStatusMapper.selectById(newStatusId);
+            if (newStatus == null) {
+                log.warn("任务状态不存在，状态ID: {}", newStatusId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态不存在");
+            }
+
+            // 如果新状态是关闭状态，自动设置关闭时间和完成度
+            if (Boolean.TRUE.equals(newStatus.getIsClosed())) {
+                issue.setClosedOn(LocalDateTime.now());
+                if (issue.getDoneRatio() == null || issue.getDoneRatio() < 100) {
+                    issue.setDoneRatio(100);
+                }
+            } else {
+                // 如果从关闭状态转换到非关闭状态，清除关闭时间
+                if (issue.getStatusId() != null) {
+                    IssueStatus oldStatus = issueStatusMapper.selectById(issue.getStatusId());
+                    if (oldStatus != null && Boolean.TRUE.equals(oldStatus.getIsClosed())) {
+                        issue.setClosedOn(null);
+                    }
+                }
+            }
+
+            issue.setStatusId(newStatusId);
+        }
+
+        // 处理指派人更新（如果提供）
+        Long assignedToId = requestDTO.getAssignedToId();
+        if (assignedToId != null) {
+            if (assignedToId == 0) {
+                // 取消分配
+                issue.setAssignedToId(null);
+            } else {
+                // 验证指派人是否存在
+                User assignedUser = userMapper.selectById(assignedToId);
+                if (assignedUser == null) {
+                    log.warn("指派人不存在，用户ID: {}", assignedToId);
+                    throw new BusinessException(ResultCode.USER_NOT_FOUND);
+                }
+                issue.setAssignedToId(assignedToId);
+            }
+        }
+
+        // 处理父任务更新（如果提供）
+        Long parentId = requestDTO.getParentId();
+        if (parentId != null) {
+            if (parentId == 0) {
+                // 取消父任务
+                issue.setParentId(null);
+            } else {
+                // 验证父任务是否存在
+                Issue parentIssue = issueMapper.selectById(parentId);
+                if (parentIssue == null) {
+                    log.warn("父任务不存在，父任务ID: {}", parentId);
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "父任务不存在");
+                }
+                // 验证父任务是否属于同一项目
+                if (!parentIssue.getProjectId().equals(issue.getProjectId())) {
+                    log.warn("父任务不属于同一项目，父任务ID: {}, 项目ID: {}", parentId, issue.getProjectId());
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "父任务必须属于同一项目");
+                }
+                // 不能将任务设置为自己的父任务
+                if (parentId.equals(issue.getId())) {
+                    log.warn("不能将任务设置为自己的父任务，任务ID: {}", issue.getId());
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "不能将任务设置为自己的父任务");
+                }
+                issue.setParentId(parentId);
+            }
+        }
+
+        // 处理分类更新（如果提供）
+        Integer categoryId = requestDTO.getCategoryId();
+        if (categoryId != null) {
+            if (categoryId == 0) {
+                // 取消分类
+                issue.setCategoryId(null);
+            } else {
+                // 验证分类是否存在
+                IssueCategory category = issueCategoryMapper.selectById(categoryId);
+                if (category == null) {
+                    log.warn("任务分类不存在，分类ID: {}", categoryId);
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类不存在");
+                }
+                // 验证分类是否属于该项目
+                if (!category.getProjectId().equals(issue.getProjectId().intValue())) {
+                    log.warn("任务分类不属于该项目，项目ID: {}, 分类ID: {}, 分类所属项目ID: {}",
+                            issue.getProjectId(), categoryId, category.getProjectId());
+                    throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
+                }
+                issue.setCategoryId(categoryId);
+            }
+        }
+
+        // 处理版本更新（如果提供）
+        Long fixedVersionId = requestDTO.getFixedVersionId();
+        if (fixedVersionId != null) {
+            issue.setFixedVersionId((fixedVersionId == 0) ? null : fixedVersionId);
+        }
+
+        // 更新其他字段
+        if (requestDTO.getSubject() != null) {
+            issue.setSubject(requestDTO.getSubject());
+        }
+        if (requestDTO.getDescription() != null) {
+            issue.setDescription(requestDTO.getDescription());
+        }
+        if (requestDTO.getPriorityId() != null) {
+            issue.setPriorityId(requestDTO.getPriorityId());
+        }
+        if (requestDTO.getStartDate() != null) {
+            issue.setStartDate(requestDTO.getStartDate());
+        }
+        if (requestDTO.getDueDate() != null) {
+            issue.setDueDate(requestDTO.getDueDate());
+        }
+        if (requestDTO.getEstimatedHours() != null) {
+            issue.setEstimatedHours(requestDTO.getEstimatedHours());
+        }
+        if (requestDTO.getDoneRatio() != null) {
+            if (requestDTO.getDoneRatio() < 0 || requestDTO.getDoneRatio() > 100) {
+                log.warn("完成度无效，完成度: {}", requestDTO.getDoneRatio());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "完成度必须在 0-100 之间");
+            }
+            issue.setDoneRatio(requestDTO.getDoneRatio());
+        }
+        if (requestDTO.getIsPrivate() != null) {
+            issue.setIsPrivate(requestDTO.getIsPrivate());
         }
     }
 
