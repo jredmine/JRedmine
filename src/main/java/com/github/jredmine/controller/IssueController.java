@@ -17,6 +17,7 @@ import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.service.IssueService;
@@ -105,6 +106,15 @@ public class IssueController {
             @RequestParam(value = "projectId", required = false) Long projectId,
             @RequestParam(value = "rootId", required = false) Long rootId) {
         List<IssueTreeNodeResponseDTO> result = issueService.getIssueTree(projectId, rootId);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取任务统计信息", description = "获取任务的统计信息，按状态、优先级、跟踪器等维度统计。如果指定 projectId，统计该项目的任务；否则统计所有可访问项目的任务。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/statistics")
+    public ApiResponse<IssueStatisticsResponseDTO> getIssueStatistics(
+            @RequestParam(value = "projectId", required = false) Long projectId) {
+        IssueStatisticsResponseDTO result = issueService.getIssueStatistics(projectId);
         return ApiResponse.success(result);
     }
 

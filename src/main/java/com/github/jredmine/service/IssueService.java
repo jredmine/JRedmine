@@ -25,6 +25,7 @@ import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueCategory;
@@ -1317,6 +1318,268 @@ public class IssueService {
             if (assignedUser != null) {
                 dto.setAssignedToName(assignedUser.getLogin());
             }
+        }
+    }
+
+    /**
+     * 获取任务统计信息
+     *
+     * @param projectId 项目ID（可选，如果不指定，统计所有项目的任务）
+     * @return 任务统计信息
+     */
+    public IssueStatisticsResponseDTO getIssueStatistics(Long projectId) {
+        MDC.put("operation", "get_issue_statistics");
+        if (projectId != null) {
+            MDC.put("projectId", String.valueOf(projectId));
+        }
+
+        try {
+            log.debug("开始查询任务统计信息，项目ID: {}", projectId);
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 如果指定了项目ID，验证项目是否存在
+            Project project = null;
+            if (projectId != null) {
+                project = projectMapper.selectById(projectId);
+                if (project == null) {
+                    log.warn("项目不存在，项目ID: {}", projectId);
+                    throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+                }
+
+                // 验证用户是否有权限访问项目
+                if (!isAdmin) {
+                    if (!projectPermissionService.hasPermission(currentUserId, projectId, "view_issues")) {
+                        log.warn("用户无权限查看项目任务，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                        throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看项目任务，需要 view_issues 权限");
+                    }
+                }
+            }
+
+            // 构建查询条件
+            LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+
+            // 如果指定了项目ID，过滤项目
+            if (projectId != null) {
+                queryWrapper.eq(Issue::getProjectId, projectId);
+            } else {
+                // 如果没有指定项目ID，需要根据权限过滤项目
+                if (!isAdmin) {
+                    // 获取当前用户是成员的项目ID集合
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getUserId, currentUserId);
+                    List<Member> members = memberMapper.selectList(memberQuery);
+                    Set<Long> memberProjectIds = members.stream()
+                            .map(Member::getProjectId)
+                            .collect(Collectors.toSet());
+
+                    // 获取公开项目ID集合
+                    LambdaQueryWrapper<Project> projectQuery = new LambdaQueryWrapper<>();
+                    projectQuery.eq(Project::getIsPublic, true);
+                    List<Project> publicProjects = projectMapper.selectList(projectQuery);
+                    Set<Long> publicProjectIds = publicProjects.stream()
+                            .map(Project::getId)
+                            .collect(Collectors.toSet());
+
+                    // 合并项目ID集合
+                    Set<Long> accessibleProjectIds = new java.util.HashSet<>();
+                    accessibleProjectIds.addAll(memberProjectIds);
+                    accessibleProjectIds.addAll(publicProjectIds);
+
+                    if (accessibleProjectIds.isEmpty()) {
+                        // 用户没有任何可访问的项目，返回空统计
+                        log.info("用户无任何可访问的项目，用户ID: {}", currentUserId);
+                        IssueStatisticsResponseDTO emptyStatistics = new IssueStatisticsResponseDTO();
+                        emptyStatistics.setTotalCount(0);
+                        emptyStatistics.setInProgressCount(0);
+                        emptyStatistics.setCompletedCount(0);
+                        emptyStatistics.setCompletionRate(0.0);
+                        emptyStatistics.setStatusStatistics(List.of());
+                        emptyStatistics.setTrackerStatistics(List.of());
+                        emptyStatistics.setPriorityStatistics(List.of());
+                        emptyStatistics.setAssigneeStatistics(List.of());
+                        emptyStatistics.setAuthorStatistics(List.of());
+                        return emptyStatistics;
+                    }
+
+                    queryWrapper.in(Issue::getProjectId, accessibleProjectIds);
+                }
+            }
+
+            // 查询所有符合条件的任务
+            List<Issue> allIssues = issueMapper.selectList(queryWrapper);
+
+            // 权限过滤：私有任务仅项目成员可见
+            List<Issue> filteredIssues = new ArrayList<>();
+            for (Issue issue : allIssues) {
+                // 检查私有任务权限
+                if (Boolean.TRUE.equals(issue.getIsPrivate()) && !isAdmin) {
+                    // 检查用户是否是项目成员
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getUserId, currentUserId)
+                            .eq(Member::getProjectId, issue.getProjectId());
+                    Member member = memberMapper.selectOne(memberQuery);
+                    if (member == null) {
+                        // 不是项目成员，跳过私有任务
+                        continue;
+                    }
+                }
+                filteredIssues.add(issue);
+            }
+
+            // 构建统计信息
+            IssueStatisticsResponseDTO statistics = new IssueStatisticsResponseDTO();
+            if (projectId != null && project != null) {
+                statistics.setProjectId(projectId);
+                statistics.setProjectName(project.getName());
+            }
+
+            // 基本统计
+            int totalCount = filteredIssues.size();
+            statistics.setTotalCount(totalCount);
+
+            // 获取所有状态信息（用于判断是否已关闭）
+            List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
+            Map<Integer, IssueStatus> statusMap = allStatuses.stream()
+                    .collect(Collectors.toMap(IssueStatus::getId, s -> s));
+
+            // 统计进行中和已完成的任务
+            int inProgressCount = 0;
+            int completedCount = 0;
+            for (Issue issue : filteredIssues) {
+                IssueStatus status = statusMap.get(issue.getStatusId());
+                if (status != null && Boolean.TRUE.equals(status.getIsClosed())) {
+                    completedCount++;
+                } else {
+                    inProgressCount++;
+                }
+            }
+            statistics.setInProgressCount(inProgressCount);
+            statistics.setCompletedCount(completedCount);
+
+            // 计算完成率
+            double completionRate = totalCount > 0 ? (completedCount * 100.0 / totalCount) : 0.0;
+            statistics.setCompletionRate(Math.round(completionRate * 100.0) / 100.0); // 保留两位小数
+
+            // 按状态统计
+            Map<Integer, Integer> statusCountMap = new HashMap<>();
+            for (Issue issue : filteredIssues) {
+                statusCountMap.put(issue.getStatusId(),
+                        statusCountMap.getOrDefault(issue.getStatusId(), 0) + 1);
+            }
+            List<IssueStatisticsResponseDTO.StatusStatistics> statusStatistics = new ArrayList<>();
+            for (Map.Entry<Integer, Integer> entry : statusCountMap.entrySet()) {
+                IssueStatus status = statusMap.get(entry.getKey());
+                if (status != null) {
+                    IssueStatisticsResponseDTO.StatusStatistics stat = new IssueStatisticsResponseDTO.StatusStatistics();
+                    stat.setStatusId(status.getId());
+                    stat.setStatusName(status.getName());
+                    stat.setCount(entry.getValue());
+                    stat.setIsClosed(status.getIsClosed());
+                    statusStatistics.add(stat);
+                }
+            }
+            // 按状态ID排序
+            statusStatistics.sort((a, b) -> Integer.compare(a.getStatusId(), b.getStatusId()));
+            statistics.setStatusStatistics(statusStatistics);
+
+            // 按跟踪器统计
+            Map<Integer, Integer> trackerCountMap = new HashMap<>();
+            for (Issue issue : filteredIssues) {
+                trackerCountMap.put(issue.getTrackerId(),
+                        trackerCountMap.getOrDefault(issue.getTrackerId(), 0) + 1);
+            }
+            List<IssueStatisticsResponseDTO.TrackerStatistics> trackerStatistics = new ArrayList<>();
+            for (Map.Entry<Integer, Integer> entry : trackerCountMap.entrySet()) {
+                Tracker tracker = trackerMapper.selectById(entry.getKey().longValue());
+                if (tracker != null) {
+                    IssueStatisticsResponseDTO.TrackerStatistics stat = new IssueStatisticsResponseDTO.TrackerStatistics();
+                    stat.setTrackerId(tracker.getId().intValue());
+                    stat.setTrackerName(tracker.getName());
+                    stat.setCount(entry.getValue());
+                    trackerStatistics.add(stat);
+                }
+            }
+            // 按跟踪器ID排序
+            trackerStatistics.sort((a, b) -> Integer.compare(a.getTrackerId(), b.getTrackerId()));
+            statistics.setTrackerStatistics(trackerStatistics);
+
+            // 按优先级统计
+            Map<Integer, Integer> priorityCountMap = new HashMap<>();
+            for (Issue issue : filteredIssues) {
+                priorityCountMap.put(issue.getPriorityId(),
+                        priorityCountMap.getOrDefault(issue.getPriorityId(), 0) + 1);
+            }
+            List<IssueStatisticsResponseDTO.PriorityStatistics> priorityStatistics = new ArrayList<>();
+            for (Map.Entry<Integer, Integer> entry : priorityCountMap.entrySet()) {
+                IssueStatisticsResponseDTO.PriorityStatistics stat = new IssueStatisticsResponseDTO.PriorityStatistics();
+                stat.setPriorityId(entry.getKey());
+                // TODO: 填充优先级名称（需要创建 Priority 实体和 Mapper）
+                stat.setPriorityName("优先级 " + entry.getKey());
+                stat.setCount(entry.getValue());
+                priorityStatistics.add(stat);
+            }
+            // 按优先级ID排序
+            priorityStatistics.sort((a, b) -> Integer.compare(a.getPriorityId(), b.getPriorityId()));
+            statistics.setPriorityStatistics(priorityStatistics);
+
+            // 按指派人统计
+            Map<Long, Integer> assigneeCountMap = new HashMap<>();
+            for (Issue issue : filteredIssues) {
+                if (issue.getAssignedToId() != null) {
+                    assigneeCountMap.put(issue.getAssignedToId(),
+                            assigneeCountMap.getOrDefault(issue.getAssignedToId(), 0) + 1);
+                }
+            }
+            List<IssueStatisticsResponseDTO.AssigneeStatistics> assigneeStatistics = new ArrayList<>();
+            for (Map.Entry<Long, Integer> entry : assigneeCountMap.entrySet()) {
+                User user = userMapper.selectById(entry.getKey());
+                if (user != null) {
+                    IssueStatisticsResponseDTO.AssigneeStatistics stat = new IssueStatisticsResponseDTO.AssigneeStatistics();
+                    stat.setUserId(user.getId());
+                    stat.setUserName(user.getLogin());
+                    stat.setCount(entry.getValue());
+                    assigneeStatistics.add(stat);
+                }
+            }
+            // 按任务数量降序排序
+            assigneeStatistics.sort((a, b) -> Integer.compare(b.getCount(), a.getCount()));
+            statistics.setAssigneeStatistics(assigneeStatistics);
+
+            // 按创建者统计
+            Map<Long, Integer> authorCountMap = new HashMap<>();
+            for (Issue issue : filteredIssues) {
+                authorCountMap.put(issue.getAuthorId(),
+                        authorCountMap.getOrDefault(issue.getAuthorId(), 0) + 1);
+            }
+            List<IssueStatisticsResponseDTO.AuthorStatistics> authorStatistics = new ArrayList<>();
+            for (Map.Entry<Long, Integer> entry : authorCountMap.entrySet()) {
+                User user = userMapper.selectById(entry.getKey());
+                if (user != null) {
+                    IssueStatisticsResponseDTO.AuthorStatistics stat = new IssueStatisticsResponseDTO.AuthorStatistics();
+                    stat.setUserId(user.getId());
+                    stat.setUserName(user.getLogin());
+                    stat.setCount(entry.getValue());
+                    authorStatistics.add(stat);
+                }
+            }
+            // 按任务数量降序排序
+            authorStatistics.sort((a, b) -> Integer.compare(b.getCount(), a.getCount()));
+            statistics.setAuthorStatistics(authorStatistics);
+
+            log.info("任务统计信息查询成功，项目ID: {}, 任务总数: {}", projectId, totalCount);
+            return statistics;
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务统计信息查询失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务统计信息查询失败");
+        } finally {
+            MDC.clear();
         }
     }
 
