@@ -151,8 +151,18 @@ public class IssueService {
             // categoryId 为 0 或 null 表示没有分类
             Integer categoryId = requestDTO.getCategoryId();
             if (categoryId != null && categoryId != 0) {
-                // TODO: 验证分类是否存在（需要创建 IssueCategory 实体和 Mapper）
-                // 暂时跳过，后续实现
+                // 验证分类是否存在
+                IssueCategory category = issueCategoryMapper.selectById(categoryId);
+                if (category == null) {
+                    log.warn("任务分类不存在，分类ID: {}", categoryId);
+                    throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类不存在");
+                }
+                // 验证分类是否属于该项目
+                if (!category.getProjectId().equals(requestDTO.getProjectId().intValue())) {
+                    log.warn("任务分类不属于该项目，项目ID: {}, 分类ID: {}, 分类所属项目ID: {}",
+                            requestDTO.getProjectId(), categoryId, category.getProjectId());
+                    throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
+                }
             }
 
             // 验证版本是否存在（如果提供且不为0）
@@ -741,7 +751,24 @@ public class IssueService {
             // 处理分类更新（如果提供）
             Integer categoryId = requestDTO.getCategoryId();
             if (categoryId != null) {
-                issue.setCategoryId((categoryId == 0) ? null : categoryId);
+                if (categoryId == 0) {
+                    // 取消分类
+                    issue.setCategoryId(null);
+                } else {
+                    // 验证分类是否存在
+                    IssueCategory category = issueCategoryMapper.selectById(categoryId);
+                    if (category == null) {
+                        log.warn("任务分类不存在，分类ID: {}", categoryId);
+                        throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类不存在");
+                    }
+                    // 验证分类是否属于该项目
+                    if (!category.getProjectId().equals(issue.getProjectId().intValue())) {
+                        log.warn("任务分类不属于该项目，项目ID: {}, 分类ID: {}, 分类所属项目ID: {}",
+                                issue.getProjectId(), categoryId, category.getProjectId());
+                        throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
+                    }
+                    issue.setCategoryId(categoryId);
+                }
             }
 
             // 处理版本更新（如果提供）
