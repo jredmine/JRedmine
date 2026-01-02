@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCategoryListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
@@ -269,6 +270,16 @@ public class ProjectController {
     public ApiResponse<Void> deleteTemplate(@PathVariable Long id) {
         projectService.deleteTemplate(id);
         return ApiResponse.success("项目模板删除成功", null);
+    }
+
+    @Operation(summary = "获取任务分类列表", description = "分页查询项目任务分类列表，支持按名称模糊查询。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_issues')")
+    @GetMapping("/{projectId}/issue-categories")
+    public ApiResponse<PageResponse<IssueCategoryResponseDTO>> listIssueCategories(
+            @PathVariable Long projectId,
+            @Valid IssueCategoryListRequestDTO requestDTO) {
+        PageResponse<IssueCategoryResponseDTO> result = issueService.listIssueCategories(projectId, requestDTO);
+        return ApiResponse.success(result);
     }
 
     @Operation(summary = "创建任务分类", description = "创建项目任务分类。分类是项目级别的，每个项目可以有自己的分类。分类可以设置默认指派人。需要认证，需要 manage_categories 或 manage_projects 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))

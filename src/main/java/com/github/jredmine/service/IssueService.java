@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.issue.IssueAssignRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueBatchUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueCategoryListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueListRequestDTO;
@@ -1992,6 +1993,113 @@ public class IssueService {
             User updatedBy = userMapper.selectById(journal.getUpdatedById().longValue());
             if (updatedBy != null) {
                 dto.setUpdatedByName(updatedBy.getLogin());
+            }
+        }
+
+        return dto;
+    }
+
+    /**
+     * 获取任务分类列表
+     *
+     * @param projectId  项目ID
+     * @param requestDTO 查询请求参数
+     * @return 分页响应
+     */
+    public PageResponse<IssueCategoryResponseDTO> listIssueCategories(Long projectId,
+            IssueCategoryListRequestDTO requestDTO) {
+        MDC.put("operation", "list_issue_categories");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            // 分页参数已通过注解验证，null 值使用默认值
+            Integer current = requestDTO.getCurrent() != null ? requestDTO.getCurrent() : 1;
+            Integer size = requestDTO.getSize() != null ? requestDTO.getSize() : 10;
+
+            log.debug("开始查询任务分类列表，项目ID: {}, 页码: {}, 每页数量: {}", projectId, current, size);
+
+            // 查询项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "view_issues")) {
+                    log.warn("用户无权限查看任务分类，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务分类，需要 view_issues 权限");
+                }
+            }
+
+            // 创建分页对象
+            Page<IssueCategory> page = new Page<>(current, size);
+
+            // 构建查询条件
+            LambdaQueryWrapper<IssueCategory> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(IssueCategory::getProjectId, projectId.intValue());
+
+            // 名称模糊查询（如果提供）
+            if (requestDTO.getName() != null && !requestDTO.getName().trim().isEmpty()) {
+                queryWrapper.like(IssueCategory::getName, requestDTO.getName().trim());
+            }
+
+            // 按 ID 排序（ID 是主键，有索引，查询更快）
+            queryWrapper.orderByAsc(IssueCategory::getId);
+
+            // 执行分页查询
+            Page<IssueCategory> result = issueCategoryMapper.selectPage(page, queryWrapper);
+
+            MDC.put("total", String.valueOf(result.getTotal()));
+            log.info("任务分类列表查询成功，项目ID: {}, 共查询到 {} 条记录", projectId, result.getTotal());
+
+            // 转换为响应 DTO
+            List<IssueCategoryResponseDTO> dtoList = result.getRecords().stream()
+                    .map(category -> toIssueCategoryResponseDTO(category, projectId))
+                    .toList();
+
+            return PageResponse.of(
+                    dtoList,
+                    (int) result.getTotal(),
+                    (int) result.getCurrent(),
+                    (int) result.getSize());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务分类列表查询失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类列表查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 将 IssueCategory 实体转换为 IssueCategoryResponseDTO
+     *
+     * @param category  任务分类实体
+     * @param projectId 项目ID
+     * @return 响应 DTO
+     */
+    private IssueCategoryResponseDTO toIssueCategoryResponseDTO(IssueCategory category, Long projectId) {
+        IssueCategoryResponseDTO dto = new IssueCategoryResponseDTO();
+        dto.setId(category.getId());
+        dto.setProjectId(projectId);
+        dto.setName(category.getName());
+        dto.setAssignedToId(
+                (category.getAssignedToId() != null) ? category.getAssignedToId().longValue() : null);
+
+        // 填充默认指派人名称
+        if (category.getAssignedToId() != null) {
+            User assignedUser = userMapper.selectById(category.getAssignedToId().longValue());
+            if (assignedUser != null) {
+                dto.setAssignedToName(assignedUser.getLogin());
             }
         }
 
