@@ -26,6 +26,9 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -116,6 +119,24 @@ public class IssueController {
             @RequestParam(value = "projectId", required = false) Long projectId) {
         IssueStatisticsResponseDTO result = issueService.getIssueStatistics(projectId);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "导出任务列表", description = "导出任务列表为 CSV 格式。支持按筛选条件导出，参数同任务列表接口。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportIssues(@Valid IssueListRequestDTO requestDTO) {
+        // 导出为 CSV
+        byte[] csvBytes = issueService.exportIssues(requestDTO);
+
+        // 设置响应头
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv;charset=UTF-8"));
+        headers.setContentDispositionFormData("attachment", "issues_" + System.currentTimeMillis() + ".csv");
+        headers.setContentLength(csvBytes.length);
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(csvBytes);
     }
 
     @Operation(summary = "获取任务子任务列表", description = "查询任务的所有子任务。需要认证，需要 view_issues 权限或系统管理员。支持递归查询（包含子任务的子任务）。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))

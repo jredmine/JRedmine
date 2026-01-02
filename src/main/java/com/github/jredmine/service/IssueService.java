@@ -458,6 +458,312 @@ public class IssueService {
     }
 
     /**
+     * 导出任务列表为 CSV
+     *
+     * @param requestDTO 查询条件（复用任务列表查询参数）
+     * @return CSV 文件内容（字节数组）
+     */
+    public byte[] exportIssues(IssueListRequestDTO requestDTO) {
+        MDC.put("operation", "export_issues");
+
+        try {
+            log.info("开始导出任务列表");
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            Long currentUserId = currentUser.getId();
+
+            // 获取当前用户是成员的项目ID集合（如果不是管理员）
+            final Set<Long> memberProjectIds;
+            if (!isAdmin) {
+                LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                memberQuery.eq(Member::getUserId, currentUserId);
+                List<Member> members = memberMapper.selectList(memberQuery);
+                memberProjectIds = members.stream()
+                        .map(Member::getProjectId)
+                        .collect(Collectors.toSet());
+            } else {
+                memberProjectIds = null;
+            }
+
+            // 构建查询条件（复用任务列表查询逻辑，但不分页）
+            LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+
+            // 项目筛选
+            if (requestDTO.getProjectId() != null) {
+                queryWrapper.eq(Issue::getProjectId, requestDTO.getProjectId());
+            }
+
+            // 状态筛选
+            if (requestDTO.getStatusId() != null) {
+                queryWrapper.eq(Issue::getStatusId, requestDTO.getStatusId());
+            }
+
+            // 跟踪器筛选
+            if (requestDTO.getTrackerId() != null) {
+                queryWrapper.eq(Issue::getTrackerId, requestDTO.getTrackerId());
+            }
+
+            // 优先级筛选
+            if (requestDTO.getPriorityId() != null) {
+                queryWrapper.eq(Issue::getPriorityId, requestDTO.getPriorityId());
+            }
+
+            // 指派人筛选
+            if (requestDTO.getAssignedToId() != null) {
+                if (requestDTO.getAssignedToId() == 0) {
+                    queryWrapper.isNull(Issue::getAssignedToId);
+                } else {
+                    queryWrapper.eq(Issue::getAssignedToId, requestDTO.getAssignedToId());
+                }
+            }
+
+            // 创建者筛选
+            if (requestDTO.getAuthorId() != null) {
+                queryWrapper.eq(Issue::getAuthorId, requestDTO.getAuthorId());
+            }
+
+            // 分类筛选
+            if (requestDTO.getCategoryId() != null) {
+                if (requestDTO.getCategoryId() == 0) {
+                    queryWrapper.isNull(Issue::getCategoryId);
+                } else {
+                    queryWrapper.eq(Issue::getCategoryId, requestDTO.getCategoryId());
+                }
+            }
+
+            // 版本筛选
+            if (requestDTO.getFixedVersionId() != null) {
+                if (requestDTO.getFixedVersionId() == 0) {
+                    queryWrapper.isNull(Issue::getFixedVersionId);
+                } else {
+                    queryWrapper.eq(Issue::getFixedVersionId, requestDTO.getFixedVersionId());
+                }
+            }
+
+            // 关键词搜索
+            if (requestDTO.getKeyword() != null && !requestDTO.getKeyword().trim().isEmpty()) {
+                queryWrapper.and(wrapper -> {
+                    wrapper.like(Issue::getSubject, requestDTO.getKeyword().trim())
+                            .or()
+                            .like(Issue::getDescription, requestDTO.getKeyword().trim());
+                });
+            }
+
+            // 是否私有筛选
+            if (requestDTO.getIsPrivate() != null) {
+                queryWrapper.eq(Issue::getIsPrivate, requestDTO.getIsPrivate());
+            }
+
+            // 权限过滤：如果不是管理员，只显示用户有权限查看的任务
+            if (!isAdmin) {
+                final Set<Long> finalMemberProjectIds = memberProjectIds;
+                queryWrapper.and(wrapper -> {
+                    wrapper.and(w -> w.eq(Issue::getIsPrivate, true)
+                            .in(finalMemberProjectIds != null && !finalMemberProjectIds.isEmpty(),
+                                    Issue::getProjectId, finalMemberProjectIds))
+                            .or()
+                            .and(w -> w.eq(Issue::getIsPrivate, false)
+                                    .in(finalMemberProjectIds != null && !finalMemberProjectIds.isEmpty(),
+                                            Issue::getProjectId, finalMemberProjectIds));
+                });
+            }
+
+            // 排序（复用任务列表排序逻辑）
+            String sortOrder = requestDTO.getSortOrder() != null ? requestDTO.getSortOrder() : "desc";
+            if (requestDTO.getSortBy() != null && !requestDTO.getSortBy().trim().isEmpty()) {
+                String sortField = requestDTO.getSortBy().trim().toLowerCase();
+                boolean ascending = "asc".equalsIgnoreCase(sortOrder);
+                switch (sortField) {
+                    case "created_on":
+                    case "updated_on":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getId);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getId);
+                        }
+                        break;
+                    case "priority":
+                    case "priority_id":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getPriorityId);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getPriorityId);
+                        }
+                        break;
+                    case "due_date":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getDueDate);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getDueDate);
+                        }
+                        break;
+                    default:
+                        queryWrapper.orderByDesc(Issue::getId);
+                        break;
+                }
+            } else {
+                queryWrapper.orderByDesc(Issue::getId);
+            }
+
+            // 查询所有符合条件的任务（不分页）
+            List<Issue> issues = issueMapper.selectList(queryWrapper);
+
+            // 权限过滤：私有任务仅项目成员可见
+            List<Issue> filteredIssues = new ArrayList<>();
+            for (Issue issue : issues) {
+                if (Boolean.TRUE.equals(issue.getIsPrivate()) && !isAdmin) {
+                    LambdaQueryWrapper<Member> memberQuery = new LambdaQueryWrapper<>();
+                    memberQuery.eq(Member::getUserId, currentUserId)
+                            .eq(Member::getProjectId, issue.getProjectId());
+                    Member member = memberMapper.selectOne(memberQuery);
+                    if (member == null) {
+                        continue;
+                    }
+                }
+                filteredIssues.add(issue);
+            }
+
+            log.info("任务列表导出查询成功，共查询到 {} 条记录", filteredIssues.size());
+
+            // 生成 CSV 内容
+            StringBuilder csvContent = new StringBuilder();
+            csvContent.append("\uFEFF"); // BOM，确保 Excel 正确识别 UTF-8
+
+            // CSV 表头
+            csvContent.append("任务ID,项目名称,跟踪器,任务标题,状态,优先级,指派人,创建者,创建时间,更新时间,截止日期,完成度,是否私有\n");
+
+            // 获取所有状态、跟踪器、用户信息（用于填充名称）
+            List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
+            Map<Integer, IssueStatus> statusMap = allStatuses.stream()
+                    .collect(Collectors.toMap(IssueStatus::getId, s -> s));
+
+            List<Tracker> allTrackers = trackerMapper.selectList(null);
+            Map<Integer, Tracker> trackerMap = allTrackers.stream()
+                    .collect(Collectors.toMap(t -> t.getId().intValue(), t -> t));
+
+            Set<Long> userIds = new java.util.HashSet<>();
+            for (Issue issue : filteredIssues) {
+                if (issue.getAssignedToId() != null) {
+                    userIds.add(issue.getAssignedToId());
+                }
+                if (issue.getAuthorId() != null) {
+                    userIds.add(issue.getAuthorId());
+                }
+            }
+            Map<Long, User> userMap = new HashMap<>();
+            if (!userIds.isEmpty()) {
+                List<User> users = userMapper.selectBatchIds(userIds);
+                userMap = users.stream()
+                        .collect(Collectors.toMap(User::getId, u -> u));
+            }
+
+            Set<Long> projectIds = filteredIssues.stream()
+                    .map(Issue::getProjectId)
+                    .collect(Collectors.toSet());
+            Map<Long, Project> projectMap = new HashMap<>();
+            if (!projectIds.isEmpty()) {
+                List<Project> projects = projectMapper.selectBatchIds(projectIds);
+                projectMap = projects.stream()
+                        .collect(Collectors.toMap(Project::getId, p -> p));
+            }
+
+            // 填充 CSV 数据行
+            for (Issue issue : filteredIssues) {
+                csvContent.append(escapeCsvField(String.valueOf(issue.getId()))).append(",");
+
+                // 项目名称
+                Project project = projectMap.get(issue.getProjectId());
+                csvContent.append(escapeCsvField(project != null ? project.getName() : "")).append(",");
+
+                // 跟踪器名称
+                Tracker tracker = trackerMap.get(issue.getTrackerId());
+                csvContent.append(escapeCsvField(tracker != null ? tracker.getName() : "")).append(",");
+
+                // 任务标题
+                csvContent.append(escapeCsvField(issue.getSubject() != null ? issue.getSubject() : "")).append(",");
+
+                // 状态名称
+                IssueStatus status = statusMap.get(issue.getStatusId());
+                csvContent.append(escapeCsvField(status != null ? status.getName() : "")).append(",");
+
+                // 优先级（暂时显示ID）
+                csvContent.append(escapeCsvField("优先级 " + issue.getPriorityId())).append(",");
+
+                // 指派人名称
+                if (issue.getAssignedToId() != null) {
+                    User assignedUser = userMap.get(issue.getAssignedToId());
+                    csvContent.append(escapeCsvField(assignedUser != null ? assignedUser.getLogin() : ""));
+                } else {
+                    csvContent.append("");
+                }
+                csvContent.append(",");
+
+                // 创建者名称
+                User author = userMap.get(issue.getAuthorId());
+                csvContent.append(escapeCsvField(author != null ? author.getLogin() : "")).append(",");
+
+                // 创建时间
+                csvContent.append(escapeCsvField(issue.getCreatedOn() != null
+                        ? issue.getCreatedOn().toString().replace("T", " ")
+                        : "")).append(",");
+
+                // 更新时间
+                csvContent.append(escapeCsvField(issue.getUpdatedOn() != null
+                        ? issue.getUpdatedOn().toString().replace("T", " ")
+                        : "")).append(",");
+
+                // 截止日期
+                csvContent.append(escapeCsvField(issue.getDueDate() != null
+                        ? issue.getDueDate().toString()
+                        : "")).append(",");
+
+                // 完成度
+                csvContent.append(escapeCsvField(issue.getDoneRatio() != null
+                        ? String.valueOf(issue.getDoneRatio())
+                        : "0")).append(",");
+
+                // 是否私有
+                csvContent.append(escapeCsvField(Boolean.TRUE.equals(issue.getIsPrivate()) ? "是" : "否"));
+
+                csvContent.append("\n");
+            }
+
+            // 转换为字节数组（UTF-8 编码）
+            byte[] csvBytes = csvContent.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+            log.info("任务列表导出成功，共导出 {} 条记录", filteredIssues.size());
+            return csvBytes;
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务列表导出失败", e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务列表导出失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 转义 CSV 字段（处理逗号、引号、换行符等特殊字符）
+     *
+     * @param field 字段值
+     * @return 转义后的字段值
+     */
+    private String escapeCsvField(String field) {
+        if (field == null) {
+            return "";
+        }
+        // 如果字段包含逗号、引号或换行符，需要用引号包裹，并转义引号
+        if (field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r")) {
+            return "\"" + field.replace("\"", "\"\"") + "\"";
+        }
+        return field;
+    }
+
+    /**
      * 将 Issue 实体转换为 IssueListItemResponseDTO
      *
      * @param issue 任务实体
