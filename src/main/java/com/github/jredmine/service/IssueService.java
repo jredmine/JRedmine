@@ -32,6 +32,7 @@ import com.github.jredmine.entity.IssueCategory;
 import com.github.jredmine.entity.IssueRelation;
 import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.Journal;
+import com.github.jredmine.entity.JournalDetail;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
@@ -41,6 +42,7 @@ import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.issue.IssueCategoryMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.issue.IssueRelationMapper;
+import com.github.jredmine.mapper.issue.JournalDetailMapper;
 import com.github.jredmine.mapper.issue.JournalMapper;
 import com.github.jredmine.mapper.issue.WatcherMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
@@ -64,6 +66,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -81,6 +84,7 @@ public class IssueService {
     private final IssueRelationMapper issueRelationMapper;
     private final IssueCategoryMapper issueCategoryMapper;
     private final JournalMapper journalMapper;
+    private final JournalDetailMapper journalDetailMapper;
     private final WatcherMapper watcherMapper;
     private final ProjectMapper projectMapper;
     private final TrackerMapper trackerMapper;
@@ -989,6 +993,10 @@ public class IssueService {
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
             }
 
+            // 保存旧任务对象（用于记录变更历史）
+            Issue oldIssue = new Issue();
+            copyIssueProperties(issue, oldIssue);
+
             // 应用更新数据（复用公共逻辑）
             applyUpdateToIssue(issue, requestDTO);
 
@@ -1005,8 +1013,8 @@ public class IssueService {
 
             log.info("任务更新成功，任务ID: {}", id);
 
-            // TODO: 记录变更历史到 journals 表
-            // 暂时跳过，后续实现
+            // 记录变更历史到 journals 表
+            recordIssueChanges(oldIssue, issue, null);
 
             // 查询更新后的任务（包含关联信息）
             return getIssueDetailById(id);
@@ -2316,6 +2324,10 @@ public class IssueService {
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
             }
 
+            // 保存旧任务对象（用于记录变更历史）
+            Issue oldIssue = new Issue();
+            copyIssueProperties(issue, oldIssue);
+
             // 验证新状态是否存在
             Integer newStatusId = requestDTO.getStatusId();
             IssueStatus newStatus = issueStatusMapper.selectById(newStatusId);
@@ -2413,9 +2425,9 @@ public class IssueService {
 
             log.info("任务状态更新成功，任务ID: {}, 旧状态ID: {}, 新状态ID: {}", id, oldStatusId, newStatusId);
 
-            // TODO: 记录状态变更历史到 journals 表
+            // 记录状态变更历史到 journals 表
             // 包括备注信息（requestDTO.getNotes()）
-            // 暂时跳过，后续实现
+            recordIssueChanges(oldIssue, issue, requestDTO.getNotes());
 
             // 查询更新后的任务（包含关联信息）
             return getIssueDetailById(id);
@@ -2474,6 +2486,10 @@ public class IssueService {
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务已被其他用户修改，请刷新后重试");
             }
 
+            // 保存旧任务对象（用于记录变更历史）
+            Issue oldIssue = new Issue();
+            copyIssueProperties(issue, oldIssue);
+
             // 处理指派人更新
             Long assignedToId = requestDTO.getAssignedToId();
             Long oldAssignedToId = issue.getAssignedToId();
@@ -2517,9 +2533,8 @@ public class IssueService {
 
             log.info("任务分配成功，任务ID: {}", id);
 
-            // TODO: 记录分配变更历史到 journals 表
-            // 包括原指派人、新指派人信息
-            // 暂时跳过，后续实现
+            // 记录变更历史到 journals 表
+            recordIssueChanges(oldIssue, issue, null);
 
             // TODO: 发送通知给新指派人
             // 如果指派人发生变化，发送邮件通知
@@ -3664,6 +3679,246 @@ public class IssueService {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务分类删除失败");
         } finally {
             MDC.clear();
+        }
+    }
+
+    /**
+     * 复制 Issue 对象属性
+     */
+    private void copyIssueProperties(Issue source, Issue target) {
+        target.setId(source.getId());
+        target.setTrackerId(source.getTrackerId());
+        target.setProjectId(source.getProjectId());
+        target.setSubject(source.getSubject());
+        target.setDescription(source.getDescription());
+        target.setDueDate(source.getDueDate());
+        target.setCategoryId(source.getCategoryId());
+        target.setStatusId(source.getStatusId());
+        target.setAssignedToId(source.getAssignedToId());
+        target.setPriorityId(source.getPriorityId());
+        target.setFixedVersionId(source.getFixedVersionId());
+        target.setAuthorId(source.getAuthorId());
+        target.setLockVersion(source.getLockVersion());
+        target.setCreatedOn(source.getCreatedOn());
+        target.setUpdatedOn(source.getUpdatedOn());
+        target.setStartDate(source.getStartDate());
+        target.setDoneRatio(source.getDoneRatio());
+        target.setEstimatedHours(source.getEstimatedHours());
+        target.setParentId(source.getParentId());
+        target.setRootId(source.getRootId());
+        target.setLft(source.getLft());
+        target.setRgt(source.getRgt());
+        target.setIsPrivate(source.getIsPrivate());
+        target.setClosedOn(source.getClosedOn());
+    }
+
+    /**
+     * 记录任务变更历史
+     * 比较旧任务和新任务的字段，记录所有变更到 journals 和 journal_details 表
+     *
+     * @param oldIssue 旧任务对象
+     * @param newIssue 新任务对象
+     * @param notes    备注信息（可选）
+     */
+    private void recordIssueChanges(Issue oldIssue, Issue newIssue, String notes) {
+        try {
+            // 获取当前用户
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+
+            // 创建 Journal 记录
+            Journal journal = new Journal();
+            journal.setJournalizedId(newIssue.getId().intValue());
+            journal.setJournalizedType("Issue");
+            journal.setUserId(currentUserId.intValue());
+            journal.setNotes(notes);
+            journal.setPrivateNotes(false);
+            journal.setCreatedOn(LocalDateTime.now());
+            journal.setUpdatedOn(LocalDateTime.now());
+
+            // 保存 Journal 记录
+            int journalInsertResult = journalMapper.insert(journal);
+            if (journalInsertResult <= 0) {
+                log.warn("创建活动日志失败，任务ID: {}", newIssue.getId());
+                return;
+            }
+
+            // 比较字段变更并记录
+            List<JournalDetail> details = new ArrayList<>();
+
+            // 比较状态ID
+            if (!Objects.equals(oldIssue.getStatusId(), newIssue.getStatusId())) {
+                String oldValue = oldIssue.getStatusId() != null ? getStatusName(oldIssue.getStatusId()) : "";
+                String newValue = newIssue.getStatusId() != null ? getStatusName(newIssue.getStatusId()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "status_id", oldValue, newValue));
+            }
+
+            // 比较指派人ID
+            if (!Objects.equals(oldIssue.getAssignedToId(), newIssue.getAssignedToId())) {
+                String oldValue = oldIssue.getAssignedToId() != null ? getUserName(oldIssue.getAssignedToId()) : "";
+                String newValue = newIssue.getAssignedToId() != null ? getUserName(newIssue.getAssignedToId()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "assigned_to_id", oldValue, newValue));
+            }
+
+            // 比较优先级ID
+            if (!Objects.equals(oldIssue.getPriorityId(), newIssue.getPriorityId())) {
+                String oldValue = oldIssue.getPriorityId() != null ? String.valueOf(oldIssue.getPriorityId()) : "";
+                String newValue = newIssue.getPriorityId() != null ? String.valueOf(newIssue.getPriorityId()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "priority_id", oldValue, newValue));
+            }
+
+            // 比较分类ID
+            if (!Objects.equals(oldIssue.getCategoryId(), newIssue.getCategoryId())) {
+                String oldValue = oldIssue.getCategoryId() != null ? getCategoryName(oldIssue.getCategoryId()) : "";
+                String newValue = newIssue.getCategoryId() != null ? getCategoryName(newIssue.getCategoryId()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "category_id", oldValue, newValue));
+            }
+
+            // 比较修复版本ID
+            if (!Objects.equals(oldIssue.getFixedVersionId(), newIssue.getFixedVersionId())) {
+                String oldValue = oldIssue.getFixedVersionId() != null ? String.valueOf(oldIssue.getFixedVersionId()) : "";
+                String newValue = newIssue.getFixedVersionId() != null ? String.valueOf(newIssue.getFixedVersionId()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "fixed_version_id", oldValue, newValue));
+            }
+
+            // 比较标题
+            if (!Objects.equals(oldIssue.getSubject(), newIssue.getSubject())) {
+                String oldValue = oldIssue.getSubject() != null ? oldIssue.getSubject() : "";
+                String newValue = newIssue.getSubject() != null ? newIssue.getSubject() : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "subject", oldValue, newValue));
+            }
+
+            // 比较描述
+            if (!Objects.equals(oldIssue.getDescription(), newIssue.getDescription())) {
+                String oldValue = oldIssue.getDescription() != null ? oldIssue.getDescription() : "";
+                String newValue = newIssue.getDescription() != null ? newIssue.getDescription() : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "description", oldValue, newValue));
+            }
+
+            // 比较开始日期
+            if (!Objects.equals(oldIssue.getStartDate(), newIssue.getStartDate())) {
+                String oldValue = oldIssue.getStartDate() != null ? oldIssue.getStartDate().toString() : "";
+                String newValue = newIssue.getStartDate() != null ? newIssue.getStartDate().toString() : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "start_date", oldValue, newValue));
+            }
+
+            // 比较截止日期
+            if (!Objects.equals(oldIssue.getDueDate(), newIssue.getDueDate())) {
+                String oldValue = oldIssue.getDueDate() != null ? oldIssue.getDueDate().toString() : "";
+                String newValue = newIssue.getDueDate() != null ? newIssue.getDueDate().toString() : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "due_date", oldValue, newValue));
+            }
+
+            // 比较预估工时
+            if (!Objects.equals(oldIssue.getEstimatedHours(), newIssue.getEstimatedHours())) {
+                String oldValue = oldIssue.getEstimatedHours() != null ? String.valueOf(oldIssue.getEstimatedHours()) : "";
+                String newValue = newIssue.getEstimatedHours() != null ? String.valueOf(newIssue.getEstimatedHours()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "estimated_hours", oldValue, newValue));
+            }
+
+            // 比较完成度
+            if (!Objects.equals(oldIssue.getDoneRatio(), newIssue.getDoneRatio())) {
+                String oldValue = oldIssue.getDoneRatio() != null ? String.valueOf(oldIssue.getDoneRatio()) : "";
+                String newValue = newIssue.getDoneRatio() != null ? String.valueOf(newIssue.getDoneRatio()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "done_ratio", oldValue, newValue));
+            }
+
+            // 比较父任务ID
+            if (!Objects.equals(oldIssue.getParentId(), newIssue.getParentId())) {
+                String oldValue = oldIssue.getParentId() != null ? String.valueOf(oldIssue.getParentId()) : "";
+                String newValue = newIssue.getParentId() != null ? String.valueOf(newIssue.getParentId()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "parent_id", oldValue, newValue));
+            }
+
+            // 比较是否私有
+            if (!Objects.equals(oldIssue.getIsPrivate(), newIssue.getIsPrivate())) {
+                String oldValue = oldIssue.getIsPrivate() != null ? String.valueOf(oldIssue.getIsPrivate()) : "";
+                String newValue = newIssue.getIsPrivate() != null ? String.valueOf(newIssue.getIsPrivate()) : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "is_private", oldValue, newValue));
+            }
+
+            // 比较关闭时间
+            if (!Objects.equals(oldIssue.getClosedOn(), newIssue.getClosedOn())) {
+                String oldValue = oldIssue.getClosedOn() != null ? oldIssue.getClosedOn().toString() : "";
+                String newValue = newIssue.getClosedOn() != null ? newIssue.getClosedOn().toString() : "";
+                details.add(createJournalDetail(journal.getId(), "attr", "closed_on", oldValue, newValue));
+            }
+
+            // 批量保存变更详情
+            if (!details.isEmpty()) {
+                for (JournalDetail detail : details) {
+                    journalDetailMapper.insert(detail);
+                }
+                log.debug("记录任务变更历史成功，任务ID: {}, 变更字段数: {}", newIssue.getId(), details.size());
+            } else {
+                // 如果没有字段变更，但有备注，仍然保留 Journal 记录
+                log.debug("记录任务备注，任务ID: {}, 无字段变更", newIssue.getId());
+            }
+
+        } catch (Exception e) {
+            log.error("记录任务变更历史失败，任务ID: {}", newIssue.getId(), e);
+            // 不抛出异常，避免影响主流程
+        }
+    }
+
+    /**
+     * 创建 JournalDetail 对象
+     */
+    private JournalDetail createJournalDetail(Integer journalId, String property, String propKey, String oldValue, String value) {
+        JournalDetail detail = new JournalDetail();
+        detail.setJournalId(journalId);
+        detail.setProperty(property);
+        detail.setPropKey(propKey);
+        detail.setOldValue(oldValue);
+        detail.setValue(value);
+        return detail;
+    }
+
+    /**
+     * 获取状态名称
+     */
+    private String getStatusName(Integer statusId) {
+        if (statusId == null) {
+            return "";
+        }
+        try {
+            IssueStatus status = issueStatusMapper.selectById(statusId);
+            return status != null ? status.getName() : String.valueOf(statusId);
+        } catch (Exception e) {
+            log.warn("获取状态名称失败，状态ID: {}", statusId, e);
+            return String.valueOf(statusId);
+        }
+    }
+
+    /**
+     * 获取用户名称
+     */
+    private String getUserName(Long userId) {
+        if (userId == null) {
+            return "";
+        }
+        try {
+            User user = userMapper.selectById(userId);
+            return user != null ? user.getLogin() : String.valueOf(userId);
+        } catch (Exception e) {
+            log.warn("获取用户名称失败，用户ID: {}", userId, e);
+            return String.valueOf(userId);
+        }
+    }
+
+    /**
+     * 获取分类名称
+     */
+    private String getCategoryName(Integer categoryId) {
+        if (categoryId == null) {
+            return "";
+        }
+        try {
+            IssueCategory category = issueCategoryMapper.selectById(categoryId);
+            return category != null ? category.getName() : String.valueOf(categoryId);
+        } catch (Exception e) {
+            log.warn("获取分类名称失败，分类ID: {}", categoryId, e);
+            return String.valueOf(categoryId);
         }
     }
 }
