@@ -1310,8 +1310,22 @@ public class IssueService {
                         "任务存在 " + childrenCount + " 个子任务，请先删除子任务");
             }
 
-            // TODO: 删除任务关联关系（issue_relations 表）
-            // 暂时跳过，后续实现任务关联功能时再处理
+            // 删除任务关联关系（issue_relations 表）
+            // 删除该任务作为源任务的关联关系（issue_from_id = 任务ID）
+            LambdaQueryWrapper<IssueRelation> fromRelationQuery = new LambdaQueryWrapper<>();
+            fromRelationQuery.eq(IssueRelation::getIssueFromId, id.intValue());
+            int deletedFromCount = issueRelationMapper.delete(fromRelationQuery);
+            if (deletedFromCount > 0) {
+                log.info("删除任务关联关系（作为源任务），任务ID: {}, 删除数量: {}", id, deletedFromCount);
+            }
+
+            // 删除该任务作为目标任务的关联关系（issue_to_id = 任务ID）
+            LambdaQueryWrapper<IssueRelation> toRelationQuery = new LambdaQueryWrapper<>();
+            toRelationQuery.eq(IssueRelation::getIssueToId, id.intValue());
+            int deletedToCount = issueRelationMapper.delete(toRelationQuery);
+            if (deletedToCount > 0) {
+                log.info("删除任务关联关系（作为目标任务），任务ID: {}, 删除数量: {}", id, deletedToCount);
+            }
 
             // 物理删除任务
             int deleteResult = issueMapper.deleteById(id);
