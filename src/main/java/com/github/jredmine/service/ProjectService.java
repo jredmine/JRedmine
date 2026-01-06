@@ -19,6 +19,7 @@ import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberJoinDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
@@ -82,6 +83,7 @@ public class ProjectService {
     private final MemberRoleMapper memberRoleMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
+    private final IssueService issueService;
 
     /**
      * 分页查询项目列表
@@ -2071,9 +2073,27 @@ public class ProjectService {
             statistics.setTrackerCount(trackerCount.intValue());
             log.debug("项目跟踪器数量: {}", trackerCount);
 
-            // 任务统计（暂不支持，返回null）
-            // TODO: 等任务管理模块实现后，添加任务统计逻辑
-            statistics.setIssueStatistics(null);
+            // 任务统计
+            try {
+                IssueStatisticsResponseDTO issueStatistics = issueService.getIssueStatistics(projectId);
+                if (issueStatistics != null) {
+                    ProjectStatisticsResponseDTO.IssueStatistics projectIssueStatistics = 
+                            new ProjectStatisticsResponseDTO.IssueStatistics();
+                    projectIssueStatistics.setTotalCount(issueStatistics.getTotalCount());
+                    projectIssueStatistics.setInProgressCount(issueStatistics.getInProgressCount());
+                    projectIssueStatistics.setCompletedCount(issueStatistics.getCompletedCount());
+                    projectIssueStatistics.setCompletionRate(issueStatistics.getCompletionRate());
+                    statistics.setIssueStatistics(projectIssueStatistics);
+                    log.debug("项目任务统计信息已填充，项目ID: {}, 任务总数: {}", 
+                            projectId, issueStatistics.getTotalCount());
+                } else {
+                    statistics.setIssueStatistics(null);
+                }
+            } catch (Exception e) {
+                // 任务统计获取失败不应该影响项目统计，只记录警告日志
+                log.warn("获取项目任务统计失败，项目ID: {}", projectId, e);
+                statistics.setIssueStatistics(null);
+            }
 
             // 工时统计（暂不支持，返回null）
             // TODO: 等工时管理模块实现后，添加工时统计逻辑
