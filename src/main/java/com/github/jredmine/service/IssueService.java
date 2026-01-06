@@ -39,6 +39,7 @@ import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.entity.Watcher;
 import com.github.jredmine.entity.Workflow;
+import com.github.jredmine.entity.Enumeration;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.enums.WorkflowRule;
 import com.github.jredmine.enums.WorkflowType;
@@ -53,6 +54,7 @@ import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
 import com.github.jredmine.mapper.workflow.WorkflowMapper;
+import com.github.jredmine.mapper.workflow.EnumerationMapper;
 import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.security.ProjectPermissionService;
@@ -96,6 +98,7 @@ public class IssueService {
     private final TrackerMapper trackerMapper;
     private final IssueStatusMapper issueStatusMapper;
     private final WorkflowMapper workflowMapper;
+    private final EnumerationMapper enumerationMapper;
     private final UserMapper userMapper;
     private final MemberMapper memberMapper;
     private final MemberRoleMapper memberRoleMapper;
@@ -190,6 +193,9 @@ public class IssueService {
                     throw new BusinessException(ResultCode.PARAM_INVALID, "任务分类不属于该项目");
                 }
             }
+
+            // 验证优先级是否存在且有效
+            validatePriority(requestDTO.getPriorityId());
 
             // 验证版本是否存在（如果提供且不为0）
             // fixedVersionId 为 0 或 null 表示没有修复版本
@@ -840,8 +846,13 @@ public class IssueService {
             }
         }
 
-        // TODO: 填充优先级名称
-        // 需要创建相应的实体和 Mapper
+        // 填充优先级名称
+        if (issue.getPriorityId() != null) {
+            String priorityName = getPriorityName(issue.getPriorityId());
+            if (priorityName != null) {
+                dto.setPriorityName(priorityName);
+            }
+        }
     }
 
     /**
@@ -958,7 +969,14 @@ public class IssueService {
             }
         }
 
-        // TODO: 填充优先级名称、分类名称、版本名称等
+        // 填充优先级名称
+        if (issue.getPriorityId() != null) {
+            String priorityName = getPriorityName(issue.getPriorityId());
+            if (priorityName != null) {
+                dto.setPriorityName(priorityName);
+            }
+        }
+        // TODO: 填充分类名称、版本名称等
         // 需要创建相应的实体和 Mapper
     }
 
@@ -1251,7 +1269,10 @@ public class IssueService {
         if (requestDTO.getDescription() != null) {
             issue.setDescription(requestDTO.getDescription());
         }
+        // 处理优先级更新（如果提供）
         if (requestDTO.getPriorityId() != null) {
+            // 验证优先级是否存在且有效
+            validatePriority(requestDTO.getPriorityId());
             issue.setPriorityId(requestDTO.getPriorityId());
         }
         if (requestDTO.getStartDate() != null) {
@@ -1854,8 +1875,9 @@ public class IssueService {
             for (Map.Entry<Integer, Integer> entry : priorityCountMap.entrySet()) {
                 IssueStatisticsResponseDTO.PriorityStatistics stat = new IssueStatisticsResponseDTO.PriorityStatistics();
                 stat.setPriorityId(entry.getKey());
-                // TODO: 填充优先级名称（需要创建 Priority 实体和 Mapper）
-                stat.setPriorityName("优先级 " + entry.getKey());
+                // 填充优先级名称
+                String priorityName = getPriorityName(entry.getKey());
+                stat.setPriorityName(priorityName != null ? priorityName : "优先级 " + entry.getKey());
                 stat.setCount(entry.getValue());
                 priorityStatistics.add(stat);
             }
@@ -2619,6 +2641,70 @@ public class IssueService {
                 return "预估工时";
             default:
                 return fieldName;
+        }
+    }
+
+    /**
+     * 验证优先级是否存在且有效
+     *
+     * @param priorityId 优先级ID
+     * @throws BusinessException 如果优先级不存在或无效
+     */
+    private void validatePriority(Integer priorityId) {
+        if (priorityId == null || priorityId == 0) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "优先级ID不能为空");
+        }
+
+        try {
+            // 查询优先级枚举（type='IssuePriority'）
+            LambdaQueryWrapper<Enumeration> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Enumeration::getId, priorityId)
+                    .eq(Enumeration::getType, "IssuePriority")
+                    .eq(Enumeration::getActive, true);
+            Enumeration enumeration = enumerationMapper.selectOne(queryWrapper);
+
+            if (enumeration == null) {
+                log.warn("优先级不存在或已禁用，优先级ID: {}", priorityId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "优先级不存在或已禁用，优先级ID: " + priorityId);
+            }
+
+            log.debug("优先级验证通过，优先级ID: {}, 优先级名称: {}", priorityId, enumeration.getName());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("验证优先级失败，优先级ID: {}", priorityId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "验证优先级失败");
+        }
+    }
+
+    /**
+     * 获取优先级名称
+     *
+     * @param priorityId 优先级ID
+     * @return 优先级名称，如果不存在则返回null
+     */
+    private String getPriorityName(Integer priorityId) {
+        if (priorityId == null || priorityId == 0) {
+            return null;
+        }
+
+        try {
+            // 查询优先级枚举（type='IssuePriority'）
+            LambdaQueryWrapper<Enumeration> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Enumeration::getId, priorityId)
+                    .eq(Enumeration::getType, "IssuePriority")
+                    .eq(Enumeration::getActive, true);
+            Enumeration enumeration = enumerationMapper.selectOne(queryWrapper);
+
+            if (enumeration != null && enumeration.getName() != null) {
+                return enumeration.getName();
+            }
+
+            log.debug("未找到优先级，优先级ID: {}", priorityId);
+            return null;
+        } catch (Exception e) {
+            log.warn("查询优先级名称失败，优先级ID: {}", priorityId, e);
+            return null;
         }
     }
 
