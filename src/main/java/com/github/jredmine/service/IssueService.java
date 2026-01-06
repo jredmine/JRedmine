@@ -38,7 +38,10 @@ import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.entity.Watcher;
+import com.github.jredmine.entity.Workflow;
 import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.enums.WorkflowRule;
+import com.github.jredmine.enums.WorkflowType;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.issue.IssueCategoryMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
@@ -49,6 +52,7 @@ import com.github.jredmine.mapper.issue.WatcherMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
+import com.github.jredmine.mapper.workflow.WorkflowMapper;
 import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.security.ProjectPermissionService;
@@ -91,6 +95,7 @@ public class IssueService {
     private final ProjectMapper projectMapper;
     private final TrackerMapper trackerMapper;
     private final IssueStatusMapper issueStatusMapper;
+    private final WorkflowMapper workflowMapper;
     private final UserMapper userMapper;
     private final MemberMapper memberMapper;
     private final MemberRoleMapper memberRoleMapper;
@@ -2407,8 +2412,8 @@ public class IssueService {
                 }
             }
 
-            // TODO: 验证字段规则（必填、只读等）
-            // 暂时跳过，后续实现完整的字段规则验证
+            // 验证字段规则（必填、只读等）
+            validateFieldRules(issue, issue.getTrackerId(), issue.getStatusId(), newStatusId, userRoleIds);
 
             // 更新状态
             Integer oldStatusId = issue.getStatusId();
@@ -2456,6 +2461,164 @@ public class IssueService {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务状态更新失败");
         } finally {
             MDC.clear();
+        }
+    }
+
+    /**
+     * 验证字段规则（必填、只读等）
+     *
+     * @param issue        任务对象
+     * @param trackerId    跟踪器ID
+     * @param oldStatusId  旧状态ID
+     * @param newStatusId  新状态ID
+     * @param userRoleIds  用户角色ID列表
+     */
+    private void validateFieldRules(Issue issue, Integer trackerId, Integer oldStatusId, 
+                                     Integer newStatusId, List<Integer> userRoleIds) {
+        try {
+            // 查询该状态转换对应的字段规则（type='field'）
+            LambdaQueryWrapper<Workflow> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Workflow::getType, WorkflowType.FIELD.getCode())
+                    .eq(Workflow::getNewStatusId, newStatusId);
+
+            // 跟踪器条件：所有跟踪器（trackerId = 0）或指定跟踪器
+            queryWrapper.and(wrapper -> wrapper
+                    .eq(Workflow::getTrackerId, 0)  // 所有跟踪器
+                    .or()
+                    .eq(Workflow::getTrackerId, trackerId)  // 指定跟踪器
+            );
+
+            // 旧状态条件：所有状态（oldStatusId = 0）或当前状态
+            queryWrapper.and(wrapper -> wrapper
+                    .eq(Workflow::getOldStatusId, 0)  // 所有状态
+                    .or()
+                    .eq(Workflow::getOldStatusId, oldStatusId)  // 当前状态
+            );
+
+            // 角色条件：如果 roleIds 为空，只查询所有角色（role_id = 0）
+            // 如果 roleIds 不为空，查询所有角色或用户角色
+            if (userRoleIds == null || userRoleIds.isEmpty()) {
+                queryWrapper.eq(Workflow::getRoleId, 0);  // 只查询所有角色
+            } else {
+                queryWrapper.and(wrapper -> wrapper
+                        .eq(Workflow::getRoleId, 0)  // 所有角色
+                        .or()
+                        .in(Workflow::getRoleId, userRoleIds)  // 用户角色
+                );
+            }
+
+            List<Workflow> fieldRules = workflowMapper.selectList(queryWrapper);
+
+            if (fieldRules.isEmpty()) {
+                log.debug("未找到字段规则，跳过验证，任务ID: {}, 跟踪器ID: {}, 旧状态ID: {}, 新状态ID: {}",
+                        issue.getId(), trackerId, oldStatusId, newStatusId);
+                return;
+            }
+
+            // 按字段名和规则类型分组
+            Map<String, List<Workflow>> fieldRulesMap = new HashMap<>();
+            for (Workflow rule : fieldRules) {
+                if (rule.getFieldName() != null && rule.getRule() != null) {
+                    fieldRulesMap.computeIfAbsent(rule.getFieldName(), k -> new ArrayList<>()).add(rule);
+                }
+            }
+
+            // 验证必填字段
+            for (Map.Entry<String, List<Workflow>> entry : fieldRulesMap.entrySet()) {
+                String fieldName = entry.getKey();
+                List<Workflow> rules = entry.getValue();
+
+                // 检查是否有必填规则
+                boolean isRequired = rules.stream()
+                        .anyMatch(rule -> WorkflowRule.REQUIRED.getCode().equals(rule.getRule()));
+
+                if (isRequired) {
+                    // 验证字段是否有值
+                    if (!isFieldHasValue(issue, fieldName)) {
+                        String fieldDisplayName = getFieldDisplayName(fieldName);
+                        log.warn("字段规则验证失败：字段 {} 为必填，但未填写，任务ID: {}", fieldName, issue.getId());
+                        throw new BusinessException(ResultCode.PARAM_INVALID,
+                                String.format("状态转换失败：字段 \"%s\" 为必填项，请先填写该字段", fieldDisplayName));
+                    }
+                }
+            }
+
+            log.debug("字段规则验证通过，任务ID: {}, 跟踪器ID: {}, 旧状态ID: {}, 新状态ID: {}, 规则数量: {}",
+                    issue.getId(), trackerId, oldStatusId, newStatusId, fieldRules.size());
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("字段规则验证失败，任务ID: {}", issue.getId(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "字段规则验证失败");
+        }
+    }
+
+    /**
+     * 检查字段是否有值
+     *
+     * @param issue     任务对象
+     * @param fieldName 字段名（数据库字段名，如 assigned_to, priority 等）
+     * @return 如果字段有值返回 true，否则返回 false
+     */
+    private boolean isFieldHasValue(Issue issue, String fieldName) {
+        if (fieldName == null || fieldName.trim().isEmpty()) {
+            return false;
+        }
+
+        switch (fieldName) {
+            case "assigned_to":
+                return issue.getAssignedToId() != null && issue.getAssignedToId() != 0;
+            case "priority":
+                return issue.getPriorityId() != null && issue.getPriorityId() != 0;
+            case "description":
+                return issue.getDescription() != null && !issue.getDescription().trim().isEmpty();
+            case "due_date":
+                return issue.getDueDate() != null;
+            case "category_id":
+                return issue.getCategoryId() != null && issue.getCategoryId() != 0;
+            case "fixed_version_id":
+                return issue.getFixedVersionId() != null && issue.getFixedVersionId() != 0;
+            case "start_date":
+                return issue.getStartDate() != null;
+            case "estimated_hours":
+                return issue.getEstimatedHours() != null && issue.getEstimatedHours() > 0;
+            default:
+                log.warn("未知的字段名，无法验证：{}", fieldName);
+                return true;  // 未知字段默认认为有值，避免误报
+        }
+    }
+
+    /**
+     * 获取字段的显示名称
+     *
+     * @param fieldName 字段名（数据库字段名）
+     * @return 字段的显示名称
+     */
+    private String getFieldDisplayName(String fieldName) {
+        if (fieldName == null || fieldName.trim().isEmpty()) {
+            return fieldName;
+        }
+
+        switch (fieldName) {
+            case "assigned_to":
+                return "指派人";
+            case "priority":
+                return "优先级";
+            case "description":
+                return "描述";
+            case "due_date":
+                return "截止日期";
+            case "category_id":
+                return "分类";
+            case "fixed_version_id":
+                return "修复版本";
+            case "start_date":
+                return "开始日期";
+            case "estimated_hours":
+                return "预估工时";
+            default:
+                return fieldName;
         }
     }
 
