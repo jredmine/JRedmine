@@ -27,6 +27,7 @@ import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
+import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueCategory;
 import com.github.jredmine.entity.IssueRelation;
@@ -48,6 +49,7 @@ import com.github.jredmine.mapper.issue.WatcherMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
+import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.util.SecurityUtils;
@@ -95,6 +97,8 @@ public class IssueService {
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final WorkflowService workflowService;
+    private final EmailService emailService;
+    private final EmailAddressMapper emailAddressMapper;
 
     /**
      * 创建任务
@@ -2550,9 +2554,59 @@ public class IssueService {
             // 记录变更历史到 journals 表
             recordIssueChanges(oldIssue, issue, null);
 
-            // TODO: 发送通知给新指派人
-            // 如果指派人发生变化，发送邮件通知
-            // 暂时跳过，后续实现
+            // 发送通知给新指派人（如果指派人发生变化且新指派人存在）
+            if (assignedToId != null && assignedToId != 0 && !assignedToId.equals(oldAssignedToId)) {
+                try {
+                    // 获取新指派人信息
+                    User assignedUser = userMapper.selectById(assignedToId);
+                    if (assignedUser != null) {
+                        // 获取新指派人的邮箱地址
+                        LambdaQueryWrapper<EmailAddress> emailQuery = new LambdaQueryWrapper<>();
+                        emailQuery.eq(EmailAddress::getUserId, assignedToId)
+                                .eq(EmailAddress::getIsDefault, true)
+                                .eq(EmailAddress::getNotify, true);
+                        EmailAddress emailAddress = emailAddressMapper.selectOne(emailQuery);
+
+                        if (emailAddress != null && emailAddress.getAddress() != null
+                                && !emailAddress.getAddress().trim().isEmpty()) {
+                            // 获取项目信息
+                            Project project = projectMapper.selectById(issue.getProjectId());
+                            String projectName = project != null ? project.getName() : "未知项目";
+
+                            // 获取分配人姓名
+                            String assignerName = currentUser.getFirstname() + " " + currentUser.getLastname();
+                            assignerName = assignerName.trim();
+                            if (assignerName.isEmpty()) {
+                                assignerName = currentUser.getLogin();
+                            }
+
+                            // 获取指派人姓名
+                            String assigneeName = assignedUser.getFirstname() + " " + assignedUser.getLastname();
+                            assigneeName = assigneeName.trim();
+                            if (assigneeName.isEmpty()) {
+                                assigneeName = assignedUser.getLogin();
+                            }
+
+                            // 发送邮件通知
+                            emailService.sendIssueAssignmentEmail(
+                                    emailAddress.getAddress(),
+                                    assigneeName,
+                                    id,
+                                    issue.getSubject(),
+                                    projectName,
+                                    assignerName);
+                            log.info("任务分配通知邮件已发送，任务ID: {}, 指派人ID: {}, 邮箱: {}",
+                                    id, assignedToId, emailAddress.getAddress());
+                        } else {
+                            log.debug("新指派人未配置邮箱或已关闭通知，跳过邮件发送，任务ID: {}, 指派人ID: {}",
+                                    id, assignedToId);
+                        }
+                    }
+                } catch (Exception e) {
+                    // 邮件发送失败不应该影响任务分配流程，只记录错误日志
+                    log.error("发送任务分配通知邮件失败，任务ID: {}, 指派人ID: {}", id, assignedToId, e);
+                }
+            }
 
             // 查询更新后的任务（包含关联信息）
             return getIssueDetailById(id);
@@ -3790,8 +3844,10 @@ public class IssueService {
 
             // 比较修复版本ID
             if (!Objects.equals(oldIssue.getFixedVersionId(), newIssue.getFixedVersionId())) {
-                String oldValue = oldIssue.getFixedVersionId() != null ? String.valueOf(oldIssue.getFixedVersionId()) : "";
-                String newValue = newIssue.getFixedVersionId() != null ? String.valueOf(newIssue.getFixedVersionId()) : "";
+                String oldValue = oldIssue.getFixedVersionId() != null ? String.valueOf(oldIssue.getFixedVersionId())
+                        : "";
+                String newValue = newIssue.getFixedVersionId() != null ? String.valueOf(newIssue.getFixedVersionId())
+                        : "";
                 details.add(createJournalDetail(journal.getId(), "attr", "fixed_version_id", oldValue, newValue));
             }
 
@@ -3825,8 +3881,10 @@ public class IssueService {
 
             // 比较预估工时
             if (!Objects.equals(oldIssue.getEstimatedHours(), newIssue.getEstimatedHours())) {
-                String oldValue = oldIssue.getEstimatedHours() != null ? String.valueOf(oldIssue.getEstimatedHours()) : "";
-                String newValue = newIssue.getEstimatedHours() != null ? String.valueOf(newIssue.getEstimatedHours()) : "";
+                String oldValue = oldIssue.getEstimatedHours() != null ? String.valueOf(oldIssue.getEstimatedHours())
+                        : "";
+                String newValue = newIssue.getEstimatedHours() != null ? String.valueOf(newIssue.getEstimatedHours())
+                        : "";
                 details.add(createJournalDetail(journal.getId(), "attr", "estimated_hours", oldValue, newValue));
             }
 
@@ -3878,7 +3936,8 @@ public class IssueService {
     /**
      * 创建 JournalDetail 对象
      */
-    private JournalDetail createJournalDetail(Integer journalId, String property, String propKey, String oldValue, String value) {
+    private JournalDetail createJournalDetail(Integer journalId, String property, String propKey, String oldValue,
+            String value) {
         JournalDetail detail = new JournalDetail();
         detail.setJournalId(journalId);
         detail.setProperty(property);

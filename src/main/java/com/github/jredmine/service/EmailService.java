@@ -28,8 +28,8 @@ public class EmailService {
     /**
      * 发送密码重置邮件
      *
-     * @param toEmail 收件人邮箱
-     * @param username 用户名
+     * @param toEmail    收件人邮箱
+     * @param username   用户名
      * @param resetToken 重置Token
      */
     public void sendPasswordResetEmail(String toEmail, String username, String resetToken) {
@@ -38,20 +38,25 @@ public class EmailService {
             message.setFrom(fromEmail);
             message.setTo(toEmail);
             message.setSubject("密码重置请求");
-            
+
             String resetLink = resetPasswordUrl + "?token=" + resetToken;
             String emailContent = String.format(
-                    "您好 %s，\n\n" +
-                    "您请求重置密码。请点击以下链接重置您的密码：\n\n" +
-                    "%s\n\n" +
-                    "此链接将在1小时后失效。\n\n" +
-                    "如果您没有请求重置密码，请忽略此邮件。\n\n" +
-                    "此邮件由系统自动发送，请勿回复。",
-                    username, resetLink
-            );
-            
+                    """
+                            您好 %s，
+                            
+                            您请求重置密码。请点击以下链接重置您的密码：
+                            
+                            %s
+                            
+                            此链接将在1小时后失效。
+                            
+                            如果您没有请求重置密码，请忽略此邮件。
+                            
+                            此邮件由系统自动发送，请勿回复。""",
+                    username, resetLink);
+
             message.setText(emailContent);
-            
+
             mailSender.send(message);
             log.info("密码重置邮件发送成功，收件人: {}", toEmail);
         } catch (Exception e) {
@@ -59,5 +64,64 @@ public class EmailService {
             throw new RuntimeException("邮件发送失败", e);
         }
     }
-}
 
+    /**
+     * 发送任务分配通知邮件
+     *
+     * @param toEmail      收件人邮箱
+     * @param assigneeName 指派人姓名
+     * @param issueId      任务ID
+     * @param issueSubject 任务标题
+     * @param projectName  项目名称
+     * @param assignerName 分配人姓名（可选）
+     */
+    public void sendIssueAssignmentEmail(String toEmail, String assigneeName, Long issueId,
+            String issueSubject, String projectName, String assignerName) {
+        try {
+            // 检查邮件配置是否有效
+            if (fromEmail == null || fromEmail.trim().isEmpty()) {
+                log.warn("邮件配置未设置（spring.mail.username），跳过邮件发送，任务ID: {}", issueId);
+                return;
+            }
+
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(toEmail);
+            message.setSubject(String.format("任务分配通知 - %s", issueSubject));
+
+            String emailContent = String.format(
+                    """
+                            您好 %s，
+                            
+                            您已被分配了一个新任务：
+                            
+                            任务ID: #%d
+                            任务标题: %s
+                            所属项目: %s
+                            """,
+                    assigneeName, issueId, issueSubject, projectName);
+
+            if (assignerName != null && !assignerName.trim().isEmpty()) {
+                emailContent += String.format("分配人: %s\n", assignerName);
+            }
+
+            emailContent += """
+                    
+                    请及时查看并处理该任务。
+                    
+                    此邮件由系统自动发送，请勿回复。""";
+
+            message.setText(emailContent);
+
+            mailSender.send(message);
+            log.info("任务分配通知邮件发送成功，收件人: {}, 任务ID: {}", toEmail, issueId);
+        } catch (org.springframework.mail.MailException e) {
+            // 邮件发送失败不应该影响任务分配流程，只记录错误日志
+            log.error("任务分配通知邮件发送失败，收件人: {}, 任务ID: {}。错误: {}。请检查邮件服务器配置（spring.mail.host, spring.mail.port等）",
+                    toEmail, issueId, e.getMessage(), e);
+        } catch (Exception e) {
+            // 其他异常
+            log.error("任务分配通知邮件发送失败，收件人: {}, 任务ID: {}", toEmail, issueId, e);
+        }
+    }
+}
