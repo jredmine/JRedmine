@@ -978,8 +978,22 @@ public class IssueService {
                 dto.setPriorityName(priorityName);
             }
         }
-        // TODO: 填充分类名称、版本名称等
-        // 需要创建相应的实体和 Mapper
+
+        // 填充分类名称
+        if (issue.getCategoryId() != null) {
+            IssueCategory category = issueCategoryMapper.selectById(issue.getCategoryId());
+            if (category != null) {
+                dto.setCategoryName(category.getName());
+            }
+        }
+
+        // 填充版本名称
+        if (issue.getFixedVersionId() != null) {
+            Version version = versionMapper.selectById(issue.getFixedVersionId());
+            if (version != null) {
+                dto.setFixedVersionName(version.getName());
+            }
+        }
     }
 
     /**
@@ -2498,14 +2512,14 @@ public class IssueService {
     /**
      * 验证字段规则（必填、只读等）
      *
-     * @param issue        任务对象
-     * @param trackerId    跟踪器ID
-     * @param oldStatusId  旧状态ID
-     * @param newStatusId  新状态ID
-     * @param userRoleIds  用户角色ID列表
+     * @param issue       任务对象
+     * @param trackerId   跟踪器ID
+     * @param oldStatusId 旧状态ID
+     * @param newStatusId 新状态ID
+     * @param userRoleIds 用户角色ID列表
      */
-    private void validateFieldRules(Issue issue, Integer trackerId, Integer oldStatusId, 
-                                     Integer newStatusId, List<Integer> userRoleIds) {
+    private void validateFieldRules(Issue issue, Integer trackerId, Integer oldStatusId,
+            Integer newStatusId, List<Integer> userRoleIds) {
         try {
             // 查询该状态转换对应的字段规则（type='field'）
             LambdaQueryWrapper<Workflow> queryWrapper = new LambdaQueryWrapper<>();
@@ -2514,27 +2528,27 @@ public class IssueService {
 
             // 跟踪器条件：所有跟踪器（trackerId = 0）或指定跟踪器
             queryWrapper.and(wrapper -> wrapper
-                    .eq(Workflow::getTrackerId, 0)  // 所有跟踪器
+                    .eq(Workflow::getTrackerId, 0) // 所有跟踪器
                     .or()
-                    .eq(Workflow::getTrackerId, trackerId)  // 指定跟踪器
+                    .eq(Workflow::getTrackerId, trackerId) // 指定跟踪器
             );
 
             // 旧状态条件：所有状态（oldStatusId = 0）或当前状态
             queryWrapper.and(wrapper -> wrapper
-                    .eq(Workflow::getOldStatusId, 0)  // 所有状态
+                    .eq(Workflow::getOldStatusId, 0) // 所有状态
                     .or()
-                    .eq(Workflow::getOldStatusId, oldStatusId)  // 当前状态
+                    .eq(Workflow::getOldStatusId, oldStatusId) // 当前状态
             );
 
             // 角色条件：如果 roleIds 为空，只查询所有角色（role_id = 0）
             // 如果 roleIds 不为空，查询所有角色或用户角色
             if (userRoleIds == null || userRoleIds.isEmpty()) {
-                queryWrapper.eq(Workflow::getRoleId, 0);  // 只查询所有角色
+                queryWrapper.eq(Workflow::getRoleId, 0); // 只查询所有角色
             } else {
                 queryWrapper.and(wrapper -> wrapper
-                        .eq(Workflow::getRoleId, 0)  // 所有角色
+                        .eq(Workflow::getRoleId, 0) // 所有角色
                         .or()
-                        .in(Workflow::getRoleId, userRoleIds)  // 用户角色
+                        .in(Workflow::getRoleId, userRoleIds) // 用户角色
                 );
             }
 
@@ -2616,7 +2630,7 @@ public class IssueService {
                 return issue.getEstimatedHours() != null && issue.getEstimatedHours() > 0;
             default:
                 log.warn("未知的字段名，无法验证：{}", fieldName);
-                return true;  // 未知字段默认认为有值，避免误报
+                return true; // 未知字段默认认为有值，避免误报
         }
     }
 
