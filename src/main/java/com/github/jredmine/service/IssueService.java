@@ -265,14 +265,19 @@ public class IssueService {
             issue.setCreatedOn(now);
             issue.setUpdatedOn(now);
 
-            // TODO: 处理树形结构（parent_id, root_id, lft, rgt）
-            // 暂时设置为 null，后续实现树形结构逻辑
+            // 处理树形结构（parent_id, root_id, lft, rgt）
+            updateTreeStructureOnCreate(issue);
 
             // 保存任务
             int insertResult = issueMapper.insert(issue);
             if (insertResult <= 0) {
                 log.error("任务创建失败，插入数据库失败");
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务创建失败");
+            }
+
+            // 如果是顶级任务，更新 root_id 为自己的 id
+            if (issue.getParentId() == null) {
+                updateRootIdForTopLevel(issue.getId());
             }
 
             log.info("任务创建成功，任务ID: {}", issue.getId());
@@ -1040,8 +1045,26 @@ public class IssueService {
             Issue oldIssue = new Issue();
             copyIssueProperties(issue, oldIssue);
 
+            // 检测父任务是否变更
+            Long oldParentId = oldIssue.getParentId();
+            Long newParentId = requestDTO.getParentId();
+            boolean parentChanged = false;
+
+            if (newParentId != null) {
+                // 0 表示取消父任务，null 表示不更新
+                Long targetParentId = (newParentId == 0) ? null : newParentId;
+                parentChanged = !Objects.equals(oldParentId, targetParentId);
+            }
+
             // 应用更新数据（复用公共逻辑）
             applyUpdateToIssue(issue, requestDTO);
+
+            // 如果父任务发生变更，需要更新树形结构
+            if (parentChanged) {
+                log.info("检测到父任务变更，任务ID: {}, 旧父任务: {}, 新父任务: {}",
+                        id, oldParentId, issue.getParentId());
+                updateTreeStructureOnMove(issue, oldIssue);
+            }
 
             // 更新乐观锁版本号和更新时间
             issue.setLockVersion(issue.getLockVersion() + 1);
@@ -1379,6 +1402,9 @@ public class IssueService {
             if (deletedToCount > 0) {
                 log.info("删除任务关联关系（作为目标任务），任务ID: {}, 删除数量: {}", id, deletedToCount);
             }
+
+            // 更新树形结构（在删除前）
+            updateNestedSetOnDelete(issue);
 
             // 物理删除任务
             int deleteResult = issueMapper.deleteById(id);
@@ -2194,8 +2220,9 @@ public class IssueService {
             // 关闭时间重置为 null（新任务）
             newIssue.setClosedOn(null);
 
-            // TODO: 处理树形结构（parent_id, root_id, lft, rgt）
-            // 暂时设置为 null，后续实现树形结构逻辑
+            // 处理树形结构（parent_id, root_id, lft, rgt）
+            // 复制的任务作为新的顶级任务
+            updateTreeStructureOnCreate(newIssue);
 
             // 保存新任务
             int insertResult = issueMapper.insert(newIssue);
@@ -2205,6 +2232,12 @@ public class IssueService {
             }
 
             Long newIssueId = newIssue.getId();
+
+            // 如果是顶级任务（复制时 parentId 被设为 null），更新 root_id 为自己的 id
+            if (newIssue.getParentId() == null) {
+                updateRootIdForTopLevel(newIssueId);
+            }
+
             log.info("任务复制成功，源任务ID: {}, 新任务ID: {}", sourceIssueId, newIssueId);
 
             // 复制子任务（如果启用）
@@ -4307,5 +4340,193 @@ public class IssueService {
             log.warn("获取分类名称失败，分类ID: {}", categoryId, e);
             return String.valueOf(categoryId);
         }
+    }
+
+    /**
+     * 处理创建任务时的树形结构
+     * 计算并设置 root_id、lft、rgt 值
+     *
+     * @param issue 待创建的任务
+     */
+    private void updateTreeStructureOnCreate(Issue issue) {
+        Long parentId = issue.getParentId();
+
+        if (parentId == null) {
+            // 顶级任务：root_id 暂时设为 null，等插入后更新为自己的 id
+            issue.setRootId(null);
+            issue.setLft(1);
+            issue.setRgt(2);
+        } else {
+            // 子任务：需要获取父任务信息
+            Issue parent = issueMapper.selectById(parentId);
+            if (parent == null) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "父任务不存在");
+            }
+
+            // 验证父任务是否属于同一项目
+            if (!parent.getProjectId().equals(issue.getProjectId())) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "父任务必须属于同一项目");
+            }
+
+            // 设置根任务ID
+            issue.setRootId(parent.getRootId() != null ? parent.getRootId() : parent.getId());
+
+            // 在父任务的右边界插入新节点
+            // 需要先更新所有受影响的节点的 lft 和 rgt 值
+            updateNestedSetOnInsert(issue.getRootId(), parent.getRgt());
+
+            // 设置新节点的 lft 和 rgt
+            issue.setLft(parent.getRgt());
+            issue.setRgt(parent.getRgt() + 1);
+        }
+    }
+
+    /**
+     * 更新嵌套集合模型的 lft 和 rgt 值
+     * 在指定位置插入新节点时，更新所有受影响的节点
+     *
+     * @param rootId         根任务ID
+     * @param insertPosition 插入位置（父任务的 rgt 值）
+     */
+    private void updateNestedSetOnInsert(Long rootId, Integer insertPosition) {
+        // 更新所有 lft >= insertPosition 的节点，lft 值加 2
+        LambdaUpdateWrapper<Issue> updateLftWrapper = new LambdaUpdateWrapper<>();
+        updateLftWrapper.eq(Issue::getRootId, rootId)
+                .ge(Issue::getLft, insertPosition)
+                .setSql("lft = lft + 2");
+        issueMapper.update(null, updateLftWrapper);
+
+        // 更新所有 rgt >= insertPosition 的节点，rgt 值加 2
+        LambdaUpdateWrapper<Issue> updateRgtWrapper = new LambdaUpdateWrapper<>();
+        updateRgtWrapper.eq(Issue::getRootId, rootId)
+                .ge(Issue::getRgt, insertPosition)
+                .setSql("rgt = rgt + 2");
+        issueMapper.update(null, updateRgtWrapper);
+    }
+
+    /**
+     * 更新顶级任务的 root_id 为自己的 id
+     * 在插入任务后调用
+     *
+     * @param issueId 任务ID
+     */
+    private void updateRootIdForTopLevel(Long issueId) {
+        Issue issue = new Issue();
+        issue.setId(issueId);
+        issue.setRootId(issueId);
+        issueMapper.updateById(issue);
+    }
+
+    /**
+     * 处理任务移动时的树形结构更新
+     * 当任务的父任务发生变更时调用
+     *
+     * @param issue    更新后的任务（包含新的 parentId）
+     * @param oldIssue 更新前的任务（包含旧的 parentId）
+     */
+    private void updateTreeStructureOnMove(Issue issue, Issue oldIssue) {
+        Long issueId = issue.getId();
+        Long oldParentId = oldIssue.getParentId();
+        Long newParentId = issue.getParentId();
+
+        log.info("开始更新任务树形结构，任务ID: {}, 旧父任务: {}, 新父任务: {}",
+                issueId, oldParentId, newParentId);
+
+        // 检查是否有子任务
+        LambdaQueryWrapper<Issue> childrenQuery = new LambdaQueryWrapper<>();
+        childrenQuery.eq(Issue::getParentId, issueId);
+        Long childrenCount = issueMapper.selectCount(childrenQuery);
+
+        if (childrenCount > 0) {
+            // 如果有子任务，暂不支持移动（避免复杂的子树移动逻辑）
+            log.warn("任务存在子任务，暂不支持移动，任务ID: {}, 子任务数量: {}", issueId, childrenCount);
+            throw new BusinessException(ResultCode.PARAM_INVALID,
+                    "任务存在 " + childrenCount + " 个子任务，暂不支持移动有子任务的任务");
+        }
+
+        // 步骤1：从旧位置删除（更新 lft/rgt）
+        if (oldIssue.getRootId() != null) {
+            Integer oldRgt = oldIssue.getRgt();
+            Long oldRootId = oldIssue.getRootId();
+
+            // 删除节点后，更新同一树中所有受影响的节点
+            // lft > oldRgt 的节点，lft 减 2
+            LambdaUpdateWrapper<Issue> updateLftWrapper = new LambdaUpdateWrapper<>();
+            updateLftWrapper.eq(Issue::getRootId, oldRootId)
+                    .gt(Issue::getLft, oldRgt)
+                    .setSql("lft = lft - 2");
+            issueMapper.update(null, updateLftWrapper);
+
+            // rgt > oldRgt 的节点，rgt 减 2
+            LambdaUpdateWrapper<Issue> updateRgtWrapper = new LambdaUpdateWrapper<>();
+            updateRgtWrapper.eq(Issue::getRootId, oldRootId)
+                    .gt(Issue::getRgt, oldRgt)
+                    .setSql("rgt = rgt - 2");
+            issueMapper.update(null, updateRgtWrapper);
+        }
+
+        // 步骤2：插入到新位置
+        if (newParentId == null) {
+            // 移动为顶级任务
+            issue.setRootId(null); // 稍后会更新为自己的 id
+            issue.setLft(1);
+            issue.setRgt(2);
+        } else {
+            // 移动为某个任务的子任务
+            Issue parent = issueMapper.selectById(newParentId);
+            if (parent == null) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "父任务不存在");
+            }
+
+            // 设置根任务ID
+            Long newRootId = parent.getRootId() != null ? parent.getRootId() : parent.getId();
+            issue.setRootId(newRootId);
+
+            // 在父任务的右边界插入
+            updateNestedSetOnInsert(newRootId, parent.getRgt());
+
+            issue.setLft(parent.getRgt());
+            issue.setRgt(parent.getRgt() + 1);
+        }
+
+        log.info("任务树形结构更新完成，任务ID: {}, 新 root_id: {}, lft: {}, rgt: {}",
+                issueId, issue.getRootId(), issue.getLft(), issue.getRgt());
+    }
+
+    /**
+     * 删除任务时更新嵌套集合模型
+     * 删除叶子节点，更新同一树中所有受影响的节点
+     *
+     * @param issue 要删除的任务
+     */
+    private void updateNestedSetOnDelete(Issue issue) {
+        Long rootId = issue.getRootId();
+        Integer lft = issue.getLft();
+        Integer rgt = issue.getRgt();
+
+        if (rootId == null || lft == null || rgt == null) {
+            log.warn("任务的树形结构数据不完整，跳过树形结构更新，任务ID: {}", issue.getId());
+            return;
+        }
+
+        log.info("开始更新删除任务后的树形结构，任务ID: {}, root_id: {}, lft: {}, rgt: {}",
+                issue.getId(), rootId, lft, rgt);
+
+        // 删除叶子节点（rgt = lft + 1）
+        // 更新同一树中所有 lft > rgt 的节点，lft 减 2
+        LambdaUpdateWrapper<Issue> updateLftWrapper = new LambdaUpdateWrapper<>();
+        updateLftWrapper.eq(Issue::getRootId, rootId)
+                .gt(Issue::getLft, rgt)
+                .setSql("lft = lft - 2");
+        issueMapper.update(null, updateLftWrapper);
+
+        // 更新同一树中所有 rgt > rgt 的节点，rgt 减 2
+        LambdaUpdateWrapper<Issue> updateRgtWrapper = new LambdaUpdateWrapper<>();
+        updateRgtWrapper.eq(Issue::getRootId, rootId)
+                .gt(Issue::getRgt, rgt)
+                .setSql("rgt = rgt - 2");
+        issueMapper.update(null, updateRgtWrapper);
+
+        log.info("删除任务后的树形结构更新完成，任务ID: {}", issue.getId());
     }
 }
