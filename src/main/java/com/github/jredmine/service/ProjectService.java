@@ -14,6 +14,9 @@ import com.github.jredmine.dto.request.project.ProjectTemplateUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberCreateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectMemberUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionCreateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionListRequestDTO;
+import com.github.jredmine.dto.request.project.VersionUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -23,6 +26,7 @@ import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
+import com.github.jredmine.dto.response.project.VersionResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Member;
@@ -33,16 +37,22 @@ import com.github.jredmine.entity.ProjectTracker;
 import com.github.jredmine.entity.Role;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
+import com.github.jredmine.entity.Version;
+import com.github.jredmine.entity.Issue;
 import com.github.jredmine.enums.ProjectModule;
 import com.github.jredmine.enums.ProjectStatus;
 import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.enums.VersionSharing;
+import com.github.jredmine.enums.VersionStatus;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.TrackerMapper;
+import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.project.ProjectTemplateRoleMapper;
 import com.github.jredmine.mapper.project.ProjectTrackerMapper;
+import com.github.jredmine.mapper.project.VersionMapper;
 import com.github.jredmine.mapper.user.EmailAddressMapper;
 import com.github.jredmine.mapper.user.MemberRoleMapper;
 import com.github.jredmine.mapper.user.RoleMapper;
@@ -81,6 +91,8 @@ public class ProjectService {
     private final EmailAddressMapper emailAddressMapper;
     private final RoleMapper roleMapper;
     private final MemberRoleMapper memberRoleMapper;
+    private final VersionMapper versionMapper;
+    private final IssueMapper issueMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final IssueService issueService;
@@ -2713,6 +2725,401 @@ public class ProjectService {
         dto.setDefaultRoles(templateRoles.stream()
                 .map(ProjectTemplateRole::getRoleId)
                 .collect(Collectors.toList()));
+
+        return dto;
+    }
+
+    // ==================== 版本管理 ====================
+
+    /**
+     * 分页查询版本列表
+     *
+     * @param projectId  项目ID
+     * @param requestDTO 查询条件
+     * @return 版本列表
+     */
+    public PageResponse<VersionResponseDTO> listVersions(Long projectId, VersionListRequestDTO requestDTO) {
+        MDC.put("operation", "list_versions");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.info("开始查询版本列表，项目ID: {}", projectId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 构建查询条件
+            LambdaQueryWrapper<Version> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Version::getProjectId, projectId.intValue());
+
+            // 按名称模糊查询
+            if (requestDTO.getName() != null && !requestDTO.getName().trim().isEmpty()) {
+                queryWrapper.like(Version::getName, requestDTO.getName().trim());
+            }
+
+            // 按状态筛选
+            if (requestDTO.getStatus() != null && !requestDTO.getStatus().trim().isEmpty()) {
+                queryWrapper.eq(Version::getStatus, requestDTO.getStatus());
+            }
+
+            // 按生效日期倒序排序（最新的在前）
+            queryWrapper.orderByDesc(Version::getEffectiveDate);
+            queryWrapper.orderByDesc(Version::getId);
+
+            // 分页查询
+            Page<Version> page = new Page<>(requestDTO.getCurrent(), requestDTO.getSize());
+            Page<Version> resultPage = versionMapper.selectPage(page, queryWrapper);
+
+            // 转换为 DTO
+            List<VersionResponseDTO> dtoList = resultPage.getRecords().stream()
+                    .map(this::convertToVersionResponseDTO)
+                    .collect(Collectors.toList());
+
+            log.info("版本列表查询成功，项目ID: {}, 总数: {}", projectId, resultPage.getTotal());
+
+            return PageResponse.of(dtoList, resultPage.getTotal(), resultPage.getCurrent(), resultPage.getSize());
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+        }
+    }
+
+    /**
+     * 根据ID获取版本详情
+     *
+     * @param projectId 项目ID
+     * @param id        版本ID
+     * @return 版本详情
+     */
+    public VersionResponseDTO getVersionById(Long projectId, Integer id) {
+        MDC.put("operation", "get_version");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(id));
+
+        try {
+            log.info("开始查询版本详情，项目ID: {}, 版本ID: {}", projectId, id);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(id);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", id);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        id, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            log.info("版本详情查询成功，版本ID: {}, 版本名称: {}", id, version.getName());
+
+            return convertToVersionResponseDTO(version);
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 创建版本
+     *
+     * @param projectId  项目ID
+     * @param requestDTO 创建版本请求
+     * @return 版本详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionResponseDTO createVersion(Long projectId, VersionCreateRequestDTO requestDTO) {
+        MDC.put("operation", "create_version");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionName", requestDTO.getName());
+
+        try {
+            log.info("开始创建版本，项目ID: {}, 版本名称: {}", projectId, requestDTO.getName());
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_versions 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_versions")) {
+                    log.warn("用户无权限创建版本，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限创建版本，需要 manage_versions 权限");
+                }
+            }
+
+            // 验证版本名称在项目中是否已存在
+            LambdaQueryWrapper<Version> checkQuery = new LambdaQueryWrapper<>();
+            checkQuery.eq(Version::getProjectId, projectId.intValue())
+                    .eq(Version::getName, requestDTO.getName().trim());
+            Version existingVersion = versionMapper.selectOne(checkQuery);
+            if (existingVersion != null) {
+                log.warn("版本名称已存在，项目ID: {}, 版本名称: {}", projectId, requestDTO.getName());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "该版本名称已存在");
+            }
+
+            // 创建版本
+            Version version = new Version();
+            version.setProjectId(projectId.intValue());
+            version.setName(requestDTO.getName().trim());
+            version.setDescription(requestDTO.getDescription());
+            version.setEffectiveDate(requestDTO.getEffectiveDate());
+            version.setWikiPageTitle(requestDTO.getWikiPageTitle());
+            version.setStatus(requestDTO.getStatus() != null ? requestDTO.getStatus() : VersionStatus.OPEN.getCode());
+            version.setSharing(requestDTO.getSharing() != null ? requestDTO.getSharing() : VersionSharing.NONE.getCode());
+            
+            // 设置创建时间和更新时间
+            java.time.LocalDateTime now = java.time.LocalDateTime.now();
+            version.setCreatedOn(now);
+            version.setUpdatedOn(now);
+
+            int insertResult = versionMapper.insert(version);
+            if (insertResult <= 0) {
+                log.error("版本创建失败，插入数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "版本创建失败");
+            }
+
+            log.info("版本创建成功，版本ID: {}, 版本名称: {}", version.getId(), version.getName());
+
+            return convertToVersionResponseDTO(version);
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionName");
+        }
+    }
+
+    /**
+     * 更新版本
+     *
+     * @param projectId  项目ID
+     * @param id         版本ID
+     * @param requestDTO 更新版本请求
+     * @return 版本详情
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionResponseDTO updateVersion(Long projectId, Integer id, VersionUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_version");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(id));
+
+        try {
+            log.info("开始更新版本，项目ID: {}, 版本ID: {}", projectId, id);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(id);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", id);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        id, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_versions 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_versions")) {
+                    log.warn("用户无权限更新版本，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新版本，需要 manage_versions 权限");
+                }
+            }
+
+            // 如果更新名称，验证是否与其他版本重名
+            if (requestDTO.getName() != null && !requestDTO.getName().trim().isEmpty()) {
+                if (!requestDTO.getName().trim().equals(version.getName())) {
+                    LambdaQueryWrapper<Version> checkQuery = new LambdaQueryWrapper<>();
+                    checkQuery.eq(Version::getProjectId, projectId.intValue())
+                            .eq(Version::getName, requestDTO.getName().trim())
+                            .ne(Version::getId, id);
+                    Version existingVersion = versionMapper.selectOne(checkQuery);
+                    if (existingVersion != null) {
+                        log.warn("版本名称已存在，项目ID: {}, 版本名称: {}", projectId, requestDTO.getName());
+                        throw new BusinessException(ResultCode.PARAM_INVALID, "该版本名称已存在");
+                    }
+                }
+                version.setName(requestDTO.getName().trim());
+            }
+
+            // 更新其他字段
+            if (requestDTO.getDescription() != null) {
+                version.setDescription(requestDTO.getDescription());
+            }
+            if (requestDTO.getEffectiveDate() != null) {
+                version.setEffectiveDate(requestDTO.getEffectiveDate());
+            }
+            if (requestDTO.getWikiPageTitle() != null) {
+                version.setWikiPageTitle(requestDTO.getWikiPageTitle());
+            }
+            if (requestDTO.getStatus() != null) {
+                version.setStatus(requestDTO.getStatus());
+            }
+            if (requestDTO.getSharing() != null) {
+                version.setSharing(requestDTO.getSharing());
+            }
+
+            // 更新更新时间
+            version.setUpdatedOn(java.time.LocalDateTime.now());
+
+            int updateResult = versionMapper.updateById(version);
+            if (updateResult <= 0) {
+                log.error("版本更新失败，更新数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "版本更新失败");
+            }
+
+            log.info("版本更新成功，版本ID: {}, 版本名称: {}", id, version.getName());
+
+            return convertToVersionResponseDTO(version);
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 删除版本
+     *
+     * @param projectId 项目ID
+     * @param id        版本ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteVersion(Long projectId, Integer id) {
+        MDC.put("operation", "delete_version");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(id));
+
+        try {
+            log.info("开始删除版本，项目ID: {}, 版本ID: {}", projectId, id);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(id);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", id);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        id, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_versions 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_versions")) {
+                    log.warn("用户无权限删除版本，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除版本，需要 manage_versions 权限");
+                }
+            }
+
+            // 检查是否有任务使用该版本
+            LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+            issueQuery.eq(Issue::getFixedVersionId, id.longValue());
+            Long issueCount = issueMapper.selectCount(issueQuery);
+            if (issueCount > 0) {
+                log.warn("版本正在被任务使用，无法删除，版本ID: {}, 关联任务数: {}", id, issueCount);
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "该版本正在被 " + issueCount + " 个任务使用，无法删除");
+            }
+
+            // 删除版本
+            int deleteResult = versionMapper.deleteById(id);
+            if (deleteResult <= 0) {
+                log.error("版本删除失败，删除数据库失败");
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "版本删除失败");
+            }
+
+            log.info("版本删除成功，版本ID: {}, 版本名称: {}", id, version.getName());
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 将 Version 实体转换为 VersionResponseDTO
+     *
+     * @param version 版本实体
+     * @return 版本响应DTO
+     */
+    private VersionResponseDTO convertToVersionResponseDTO(Version version) {
+        VersionResponseDTO dto = new VersionResponseDTO();
+        dto.setId(version.getId());
+        dto.setProjectId(version.getProjectId());
+        dto.setName(version.getName());
+        dto.setDescription(version.getDescription());
+        dto.setEffectiveDate(version.getEffectiveDate());
+        dto.setCreatedOn(version.getCreatedOn());
+        dto.setUpdatedOn(version.getUpdatedOn());
+        dto.setWikiPageTitle(version.getWikiPageTitle());
+        dto.setStatus(version.getStatus());
+        dto.setSharing(version.getSharing());
+
+        // 填充项目名称
+        if (version.getProjectId() != null) {
+            Project project = projectMapper.selectById(version.getProjectId());
+            if (project != null) {
+                dto.setProjectName(project.getName());
+            }
+        }
+
+        // 统计关联的任务数量
+        LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+        issueQuery.eq(Issue::getFixedVersionId, version.getId().longValue());
+        Long issueCount = issueMapper.selectCount(issueQuery);
+        dto.setIssueCount(issueCount.intValue());
 
         return dto;
     }

@@ -4,6 +4,9 @@ import com.github.jredmine.dto.request.issue.IssueCategoryCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.MemberRoleAssignRequestDTO;
+import com.github.jredmine.dto.request.project.VersionCreateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionListRequestDTO;
+import com.github.jredmine.dto.request.project.VersionUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectArchiveRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCopyRequestDTO;
 import com.github.jredmine.dto.request.project.ProjectCreateRequestDTO;
@@ -17,6 +20,7 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueCategoryResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
+import com.github.jredmine.dto.response.project.VersionResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
@@ -311,5 +315,58 @@ public class ProjectController {
             @PathVariable Integer id) {
         issueService.deleteIssueCategory(projectId, id);
         return ApiResponse.success("任务分类删除成功", null);
+    }
+
+    // ==================== 版本管理接口 ====================
+
+    @Operation(summary = "获取版本列表", description = "分页查询项目版本列表，支持按名称、状态筛选。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
+    @GetMapping("/{projectId}/versions")
+    public ApiResponse<PageResponse<VersionResponseDTO>> listVersions(
+            @PathVariable Long projectId,
+            @Valid VersionListRequestDTO requestDTO) {
+        PageResponse<VersionResponseDTO> result = projectService.listVersions(projectId, requestDTO);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取版本详情", description = "根据版本ID获取版本详细信息。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
+    @GetMapping("/{projectId}/versions/{id}")
+    public ApiResponse<VersionResponseDTO> getVersionById(
+            @PathVariable Long projectId,
+            @PathVariable Integer id) {
+        VersionResponseDTO result = projectService.getVersionById(projectId, id);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "创建版本", description = "创建项目版本/里程碑。版本是项目级别的，每个项目可以有自己的版本。需要认证，需要 manage_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_versions')")
+    @PostMapping("/{projectId}/versions")
+    public ApiResponse<VersionResponseDTO> createVersion(
+            @PathVariable Long projectId,
+            @Valid @RequestBody VersionCreateRequestDTO requestDTO) {
+        VersionResponseDTO result = projectService.createVersion(projectId, requestDTO);
+        return ApiResponse.success("版本创建成功", result);
+    }
+
+    @Operation(summary = "更新版本", description = "更新项目版本。支持部分更新（只更新提供的字段）。需要认证，需要 manage_versions 权限或系统管理员。版本名称在同一项目内必须唯一。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_versions')")
+    @PutMapping("/{projectId}/versions/{id}")
+    public ApiResponse<VersionResponseDTO> updateVersion(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody VersionUpdateRequestDTO requestDTO) {
+        VersionResponseDTO result = projectService.updateVersion(projectId, id, requestDTO);
+        return ApiResponse.success("版本更新成功", result);
+    }
+
+    @Operation(summary = "删除版本", description = "删除项目版本。如果版本正在被任务使用，则不能删除。需要认证，需要 manage_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_versions')")
+    @DeleteMapping("/{projectId}/versions/{id}")
+    public ApiResponse<Void> deleteVersion(
+            @PathVariable Long projectId,
+            @PathVariable Integer id) {
+        projectService.deleteVersion(projectId, id);
+        return ApiResponse.success("版本删除成功", null);
     }
 }
