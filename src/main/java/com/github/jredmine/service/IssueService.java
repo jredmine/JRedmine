@@ -37,6 +37,7 @@ import com.github.jredmine.entity.JournalDetail;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.Tracker;
 import com.github.jredmine.entity.User;
+import com.github.jredmine.entity.Version;
 import com.github.jredmine.entity.Watcher;
 import com.github.jredmine.entity.Workflow;
 import com.github.jredmine.entity.Enumeration;
@@ -51,6 +52,7 @@ import com.github.jredmine.mapper.issue.JournalDetailMapper;
 import com.github.jredmine.mapper.issue.JournalMapper;
 import com.github.jredmine.mapper.issue.WatcherMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
+import com.github.jredmine.mapper.project.VersionMapper;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
 import com.github.jredmine.mapper.workflow.WorkflowMapper;
@@ -95,6 +97,7 @@ public class IssueService {
     private final JournalDetailMapper journalDetailMapper;
     private final WatcherMapper watcherMapper;
     private final ProjectMapper projectMapper;
+    private final VersionMapper versionMapper;
     private final TrackerMapper trackerMapper;
     private final IssueStatusMapper issueStatusMapper;
     private final WorkflowMapper workflowMapper;
@@ -201,8 +204,7 @@ public class IssueService {
             // fixedVersionId 为 0 或 null 表示没有修复版本
             Long fixedVersionId = requestDTO.getFixedVersionId();
             if (fixedVersionId != null && fixedVersionId != 0) {
-                // TODO: 验证版本是否存在（需要创建 Version 实体和 Mapper）
-                // 暂时跳过，后续实现
+                validateVersion(fixedVersionId, requestDTO.getProjectId());
             }
 
             // 验证父任务是否存在（如果提供且不为0）
@@ -1259,7 +1261,14 @@ public class IssueService {
         // 处理版本更新（如果提供）
         Long fixedVersionId = requestDTO.getFixedVersionId();
         if (fixedVersionId != null) {
-            issue.setFixedVersionId((fixedVersionId == 0) ? null : fixedVersionId);
+            if (fixedVersionId == 0) {
+                // 0 表示清除版本
+                issue.setFixedVersionId(null);
+            } else {
+                // 验证版本是否存在且属于该项目
+                validateVersion(fixedVersionId, issue.getProjectId());
+                issue.setFixedVersionId(fixedVersionId);
+            }
         }
 
         // 更新其他字段
@@ -2705,6 +2714,48 @@ public class IssueService {
         } catch (Exception e) {
             log.warn("查询优先级名称失败，优先级ID: {}", priorityId, e);
             return null;
+        }
+    }
+
+    /**
+     * 验证版本是否存在且属于指定项目
+     *
+     * @param versionId 版本ID
+     * @param projectId 项目ID
+     * @throws BusinessException 如果版本不存在或不属于该项目
+     */
+    private void validateVersion(Long versionId, Long projectId) {
+        if (versionId == null || versionId == 0) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "版本ID不能为空");
+        }
+
+        if (projectId == null) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "项目ID不能为空");
+        }
+
+        try {
+            // 查询版本
+            Version version = versionMapper.selectById(versionId.intValue());
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在，版本ID: " + versionId);
+            }
+
+            // 验证版本是否属于该项目
+            if (version.getProjectId() == null || !version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本所属项目ID: {}, 任务项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "版本不属于该项目，版本ID: " + versionId + "，项目ID: " + projectId);
+            }
+
+            log.debug("版本验证通过，版本ID: {}, 版本名称: {}, 项目ID: {}",
+                    versionId, version.getName(), projectId);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("验证版本失败，版本ID: {}, 项目ID: {}", versionId, projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "验证版本失败");
         }
     }
 
