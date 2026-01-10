@@ -29,6 +29,7 @@ import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueImportResultDTO;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueCategory;
@@ -65,9 +66,12 @@ import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.github.jredmine.entity.Member;
 import com.github.jredmine.entity.MemberRole;
@@ -787,11 +791,455 @@ public class IssueService {
         if (field == null) {
             return "";
         }
-        // 如果字段包含逗号、引号或换行符，需要用引号包裹，并转义引号
+        // 如果字段包含逗号、引号、换行符，需要用引号包裹，并转义引号
         if (field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r")) {
             return "\"" + field.replace("\"", "\"\"") + "\"";
         }
         return field;
+    }
+
+    /**
+     * 从 Excel 文件导入任务
+     *
+     * @param projectId 项目ID
+     * @param file      Excel 文件
+     * @return 导入结果
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueImportResultDTO importIssuesFromExcel(Long projectId, MultipartFile file) {
+        MDC.put("operation", "import_issues");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.info("开始导入任务，项目ID: {}, 文件名: {}", projectId, file.getOriginalFilename());
+
+            // 验证项目和权限
+            validateProjectAndPermission(projectId);
+
+            // 使用 Workbook 处理导入
+            try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
+                return processWorkbookImport(projectId, workbook, file.getOriginalFilename());
+            }
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务导入失败，项目ID: {}", projectId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务导入失败: " + e.getMessage());
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 从文件路径导入任务
+     *
+     * @param projectId 项目ID
+     * @param filePath  Excel 文件路径
+     * @return 导入结果
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public IssueImportResultDTO importIssuesFromPath(Long projectId, String filePath) {
+        MDC.put("operation", "import_issues_from_path");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.info("开始从文件路径导入任务，项目ID: {}, 文件路径: {}", projectId, filePath);
+
+            // 验证文件路径
+            if (filePath == null || filePath.trim().isEmpty()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "文件路径不能为空");
+            }
+
+            // 检查文件是否存在
+            java.io.File file = new java.io.File(filePath);
+            if (!file.exists()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "文件不存在: " + filePath);
+            }
+
+            if (!file.isFile()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "路径不是文件: " + filePath);
+            }
+
+            // 验证文件格式
+            String filename = file.getName();
+            if (!filename.endsWith(".xlsx") && !filename.endsWith(".xls")) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "只支持 Excel 文件格式 (.xlsx, .xls)");
+            }
+
+            // 验证项目和权限
+            validateProjectAndPermission(projectId);
+
+            // 使用 Workbook 处理导入
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(file);
+                    Workbook workbook = new XSSFWorkbook(fis)) {
+                return processWorkbookImport(projectId, workbook, filename);
+            }
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("从文件路径导入任务失败", e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "导入任务失败: " + e.getMessage());
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 验证项目和权限
+     *
+     * @param projectId 项目ID
+     */
+    private void validateProjectAndPermission(Long projectId) {
+        // 验证项目是否存在
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目不存在");
+        }
+
+        // 权限验证
+        User currentUser = securityUtils.getCurrentUser();
+        Long currentUserId = currentUser.getId();
+        boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+        if (!isAdmin) {
+            if (!projectPermissionService.hasPermission(currentUserId, projectId, "add_issues")) {
+                throw new BusinessException(ResultCode.FORBIDDEN, "无权限添加任务，需要 add_issues 权限");
+            }
+        }
+    }
+
+    /**
+     * 处理 Workbook 导入
+     *
+     * @param projectId 项目ID
+     * @param workbook  Excel Workbook
+     * @param filename  文件名（用于日志）
+     * @return 导入结果
+     */
+    private IssueImportResultDTO processWorkbookImport(Long projectId, Workbook workbook, String filename)
+            throws Exception {
+        IssueImportResultDTO result = new IssueImportResultDTO();
+        User currentUser = securityUtils.getCurrentUser();
+        Long currentUserId = currentUser.getId();
+
+        Sheet sheet = workbook.getSheetAt(0);
+
+        // 跳过标题行，从第2行开始
+        int totalRows = sheet.getLastRowNum();
+        result.setTotal(totalRows);
+
+        for (int rowIndex = 1; rowIndex <= totalRows; rowIndex++) {
+            Row row = sheet.getRow(rowIndex);
+            if (row == null) {
+                result.incrementSkipped();
+                continue;
+            }
+
+            try {
+                processImportRow(row, rowIndex, projectId, currentUserId, result);
+            } catch (Exception e) {
+                String subject = "";
+                try {
+                    subject = getCellValueAsString(row.getCell(0));
+                } catch (Exception ignored) {
+                }
+                result.addError(rowIndex + 1, subject, e.getMessage());
+                log.error("任务导入失败，行: {}", rowIndex + 1, e);
+            }
+        }
+
+        log.info("任务导入完成，文件: {}, 总数: {}, 成功: {}, 失败: {}, 跳过: {}",
+                filename, result.getTotal(), result.getSuccess(), result.getFailed(), result.getSkipped());
+
+        return result;
+    }
+
+    /**
+     * 处理导入的单行数据
+     *
+     * @param row           Excel 行
+     * @param rowIndex      行索引（从1开始）
+     * @param projectId     项目ID
+     * @param currentUserId 当前用户ID
+     * @param result        导入结果
+     */
+    private void processImportRow(Row row, int rowIndex, Long projectId, Long currentUserId,
+            IssueImportResultDTO result) {
+        // 解析行数据
+        String subject = getCellValueAsString(row.getCell(0));
+        if (subject == null || subject.trim().isEmpty()) {
+            result.addError(rowIndex + 1, "", "任务标题不能为空");
+            return;
+        }
+
+        String trackerName = getCellValueAsString(row.getCell(1));
+        String statusName = getCellValueAsString(row.getCell(2));
+        String priorityName = getCellValueAsString(row.getCell(3));
+        String assignedToLogin = getCellValueAsString(row.getCell(4));
+        String description = getCellValueAsString(row.getCell(5));
+        String startDateStr = getCellValueAsString(row.getCell(6));
+        String dueDateStr = getCellValueAsString(row.getCell(7));
+        String estimatedHoursStr = getCellValueAsString(row.getCell(8));
+        String doneRatioStr = getCellValueAsString(row.getCell(9));
+
+        // 创建任务
+        Issue issue = new Issue();
+        issue.setProjectId(projectId);
+        issue.setSubject(subject.trim());
+        issue.setDescription(description);
+        issue.setAuthorId(currentUserId);
+        issue.setLockVersion(0);
+        LocalDateTime now = LocalDateTime.now();
+        issue.setCreatedOn(now);
+        issue.setUpdatedOn(now);
+
+        // 处理跟踪器
+        if (trackerName != null && !trackerName.trim().isEmpty()) {
+            Tracker tracker = findTrackerByName(trackerName.trim());
+            if (tracker != null) {
+                issue.setTrackerId(tracker.getId().intValue());
+            } else {
+                result.addError(rowIndex + 1, subject, "跟踪器不存在: " + trackerName);
+                return;
+            }
+        } else {
+            // 使用默认跟踪器 (Bug = 1)
+            issue.setTrackerId(1);
+        }
+
+        // 处理状态
+        if (statusName != null && !statusName.trim().isEmpty()) {
+            IssueStatus status = findStatusByName(statusName.trim());
+            if (status != null) {
+                issue.setStatusId(status.getId());
+            } else {
+                result.addError(rowIndex + 1, subject, "状态不存在: " + statusName);
+                return;
+            }
+        } else {
+            // 使用默认状态 (New = 1)
+            issue.setStatusId(1);
+        }
+
+        // 处理优先级
+        if (priorityName != null && !priorityName.trim().isEmpty()) {
+            Integer priorityId = findPriorityByName(priorityName.trim());
+            if (priorityId != null) {
+                issue.setPriorityId(priorityId);
+            } else {
+                result.addError(rowIndex + 1, subject, "优先级不存在: " + priorityName);
+                return;
+            }
+        } else {
+            // 使用默认优先级 (Normal = 2)
+            issue.setPriorityId(2);
+        }
+
+        // 处理指派人
+        if (assignedToLogin != null && !assignedToLogin.trim().isEmpty()) {
+            User assignedUser = findUserByLogin(assignedToLogin.trim());
+            if (assignedUser != null) {
+                issue.setAssignedToId(assignedUser.getId());
+            } else {
+                log.warn("指派人不存在，行: {}, 登录名: {}", rowIndex + 1, assignedToLogin);
+            }
+        }
+
+        // 处理开始日期
+        if (startDateStr != null && !startDateStr.trim().isEmpty()) {
+            try {
+                issue.setStartDate(java.time.LocalDate.parse(startDateStr.trim()));
+            } catch (Exception e) {
+                log.warn("开始日期格式错误，行: {}, 日期: {}", rowIndex + 1, startDateStr);
+            }
+        }
+
+        // 处理截止日期
+        if (dueDateStr != null && !dueDateStr.trim().isEmpty()) {
+            try {
+                issue.setDueDate(java.time.LocalDate.parse(dueDateStr.trim()));
+            } catch (Exception e) {
+                log.warn("截止日期格式错误，行: {}, 日期: {}", rowIndex + 1, dueDateStr);
+            }
+        }
+
+        // 处理预估工时
+        if (estimatedHoursStr != null && !estimatedHoursStr.trim().isEmpty()) {
+            try {
+                issue.setEstimatedHours(Float.parseFloat(estimatedHoursStr.trim()));
+            } catch (Exception e) {
+                log.warn("预估工时格式错误，行: {}, 工时: {}", rowIndex + 1, estimatedHoursStr);
+            }
+        }
+
+        // 处理完成度
+        if (doneRatioStr != null && !doneRatioStr.trim().isEmpty()) {
+            try {
+                int doneRatio = Integer.parseInt(doneRatioStr.trim());
+                if (doneRatio >= 0 && doneRatio <= 100) {
+                    issue.setDoneRatio(doneRatio);
+                }
+            } catch (Exception e) {
+                log.warn("完成度格式错误，行: {}, 完成度: {}", rowIndex + 1, doneRatioStr);
+            }
+        }
+
+        if (issue.getDoneRatio() == null) {
+            issue.setDoneRatio(0);
+        }
+
+        issue.setIsPrivate(false);
+
+        // 处理树形结构
+        updateTreeStructureOnCreate(issue);
+
+        // 保存任务
+        int insertResult = issueMapper.insert(issue);
+        if (insertResult <= 0) {
+            result.addError(rowIndex + 1, subject, "插入数据库失败");
+            return;
+        }
+
+        // 如果是顶级任务，更新 root_id
+        if (issue.getParentId() == null) {
+            updateRootIdForTopLevel(issue.getId());
+        }
+
+        // 记录任务创建
+        recordIssueCreation(issue);
+
+        result.incrementSuccess();
+        log.debug("任务导入成功，行: {}, 任务ID: {}", rowIndex + 1, issue.getId());
+    }
+
+    /**
+     * 生成导入模板 Excel 文件
+     *
+     * @return Excel 文件内容（字节数组）
+     */
+    public byte[] generateImportTemplate() {
+        try {
+            Workbook workbook = new XSSFWorkbook();
+            Sheet sheet = workbook.createSheet("任务导入模板");
+
+            // 创建标题行样式
+            CellStyle headerStyle = workbook.createCellStyle();
+            Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+            // 创建标题行
+            Row headerRow = sheet.createRow(0);
+            String[] headers = {
+                    "任务标题*",
+                    "跟踪器",
+                    "状态",
+                    "优先级",
+                    "指派人(登录名)",
+                    "描述",
+                    "开始日期(yyyy-MM-dd)",
+                    "截止日期(yyyy-MM-dd)",
+                    "预估工时",
+                    "完成度(0-100)"
+            };
+
+            for (int i = 0; i < headers.length; i++) {
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+                sheet.setColumnWidth(i, 4000);
+            }
+
+            // 添加示例数据行
+            Row exampleRow = sheet.createRow(1);
+            exampleRow.createCell(0).setCellValue("修复登录页面Bug");
+            exampleRow.createCell(1).setCellValue("Bug");
+            exampleRow.createCell(2).setCellValue("New");
+            exampleRow.createCell(3).setCellValue("High");
+            exampleRow.createCell(4).setCellValue("admin");
+            exampleRow.createCell(5).setCellValue("登录页面无法正常显示");
+            exampleRow.createCell(6).setCellValue("2026-01-10");
+            exampleRow.createCell(7).setCellValue("2026-01-15");
+            exampleRow.createCell(8).setCellValue("4");
+            exampleRow.createCell(9).setCellValue("0");
+
+            // 转换为字节数组
+            java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream();
+            workbook.write(outputStream);
+            workbook.close();
+
+            return outputStream.toByteArray();
+
+        } catch (Exception e) {
+            log.error("生成导入模板失败", e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "生成导入模板失败");
+        }
+    }
+
+    /**
+     * 获取单元格值作为字符串
+     */
+    private String getCellValueAsString(Cell cell) {
+        if (cell == null) {
+            return null;
+        }
+        switch (cell.getCellType()) {
+            case STRING:
+                return cell.getStringCellValue();
+            case NUMERIC:
+                if (DateUtil.isCellDateFormatted(cell)) {
+                    return cell.getLocalDateTimeCellValue().toString();
+                }
+                return String.valueOf((int) cell.getNumericCellValue());
+            case BOOLEAN:
+                return String.valueOf(cell.getBooleanCellValue());
+            case FORMULA:
+                return cell.getCellFormula();
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 根据名称查找跟踪器
+     */
+    private Tracker findTrackerByName(String name) {
+        LambdaQueryWrapper<Tracker> query = new LambdaQueryWrapper<>();
+        query.eq(Tracker::getName, name);
+        return trackerMapper.selectOne(query);
+    }
+
+    /**
+     * 根据名称查找状态
+     */
+    private IssueStatus findStatusByName(String name) {
+        LambdaQueryWrapper<IssueStatus> query = new LambdaQueryWrapper<>();
+        query.eq(IssueStatus::getName, name);
+        return issueStatusMapper.selectOne(query);
+    }
+
+    /**
+     * 根据名称查找优先级
+     */
+    private Integer findPriorityByName(String name) {
+        LambdaQueryWrapper<Enumeration> query = new LambdaQueryWrapper<>();
+        query.eq(Enumeration::getType, "IssuePriority")
+                .eq(Enumeration::getName, name);
+        Enumeration priority = enumerationMapper.selectOne(query);
+        return priority != null ? priority.getId() : null;
+    }
+
+    /**
+     * 根据登录名查找用户
+     */
+    private User findUserByLogin(String login) {
+        LambdaQueryWrapper<User> query = new LambdaQueryWrapper<>();
+        query.eq(User::getLogin, login);
+        return userMapper.selectOne(query);
     }
 
     /**

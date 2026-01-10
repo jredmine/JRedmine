@@ -21,7 +21,10 @@ import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueImportResultDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
+import com.github.jredmine.enums.ResultCode;
+import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.service.IssueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -40,6 +43,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -139,6 +143,56 @@ public class IssueController {
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(csvBytes);
+    }
+
+    @Operation(summary = "下载任务导入模板", description = "下载任务导入的 Excel 模板文件。需要认证。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("isAuthenticated()")
+    @GetMapping("/import/template")
+    public ResponseEntity<byte[]> downloadImportTemplate() {
+        // 生成导入模板
+        byte[] templateBytes = issueService.generateImportTemplate();
+
+        // 设置响应头
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+        headers.setContentDispositionFormData("attachment", "issues_import_template.xlsx");
+        headers.setContentLength(templateBytes.length);
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(templateBytes);
+    }
+
+    @Operation(summary = "导入任务（文件上传）", description = "通过上传 Excel 文件批量导入任务到指定项目。支持的字段包括：任务标题、跟踪器、状态、优先级、指派人、描述、开始日期、截止日期、预估工时、完成度。需要认证，需要 add_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('add_issues')")
+    @PostMapping("/import")
+    public ApiResponse<IssueImportResultDTO> importIssues(
+            @RequestParam("projectId") Long projectId,
+            @RequestParam("file") MultipartFile file) {
+        
+        // 验证文件
+        if (file.isEmpty()) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "文件不能为空");
+        }
+        
+        String filename = file.getOriginalFilename();
+        if (filename == null || (!filename.endsWith(".xlsx") && !filename.endsWith(".xls"))) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "只支持 Excel 文件格式 (.xlsx, .xls)");
+        }
+
+        IssueImportResultDTO result = issueService.importIssuesFromExcel(projectId, file);
+        return ApiResponse.success("任务导入完成", result);
+    }
+
+    @Operation(summary = "导入任务（文件路径）", description = "通过指定 Excel 文件路径批量导入任务到指定项目。支持的字段包括：任务标题、跟踪器、状态、优先级、指派人、描述、开始日期、截止日期、预估工时、完成度。需要认证，需要 add_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('add_issues')")
+    @PostMapping("/import-from-path")
+    public ApiResponse<IssueImportResultDTO> importIssuesFromPath(
+            @RequestParam("projectId") Long projectId,
+            @RequestParam("filePath") String filePath) {
+        
+        IssueImportResultDTO result = issueService.importIssuesFromPath(projectId, filePath);
+        return ApiResponse.success("任务导入完成", result);
     }
 
     @Operation(summary = "获取任务子任务列表", description = "查询任务的所有子任务。需要认证，需要 view_issues 权限或系统管理员。支持递归查询（包含子任务的子任务）。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
