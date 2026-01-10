@@ -282,6 +282,9 @@ public class IssueService {
 
             log.info("任务创建成功，任务ID: {}", issue.getId());
 
+            // 记录任务创建到 journals 表
+            recordIssueCreation(issue);
+
             // 查询创建的任务（包含关联信息）
             return getIssueDetailById(issue.getId());
         } catch (BusinessException e) {
@@ -1157,6 +1160,10 @@ public class IssueService {
                             "任务 ID: " + issue.getId() + " 已被其他用户修改，请刷新后重试");
                 }
 
+                // 保存旧任务对象（用于记录变更历史）
+                Issue oldIssue = new Issue();
+                copyIssueProperties(issue, oldIssue);
+
                 // 应用更新数据（复用单个更新的逻辑）
                 applyUpdateToIssue(issue, requestDTO.getUpdateData());
 
@@ -1171,6 +1178,9 @@ public class IssueService {
                     throw new BusinessException(ResultCode.SYSTEM_ERROR,
                             "任务 ID: " + issue.getId() + " 更新失败");
                 }
+
+                // 记录变更历史到 journals 表
+                recordIssueChanges(oldIssue, issue, null);
 
                 // 查询更新后的任务详情
                 IssueDetailResponseDTO detailDTO = getIssueDetailById(issue.getId());
@@ -2239,6 +2249,10 @@ public class IssueService {
             }
 
             log.info("任务复制成功，源任务ID: {}, 新任务ID: {}", sourceIssueId, newIssueId);
+
+            // 记录任务复制到 journals 表（创建类型的日志，并附加复制说明）
+            String copyNote = "从任务 #" + sourceIssueId + " 复制";
+            recordIssueCreation(newIssue, copyNote);
 
             // 复制子任务（如果启用）
             if (Boolean.TRUE.equals(requestDTO.getCopyChildren())) {
@@ -4125,6 +4139,55 @@ public class IssueService {
         target.setRgt(source.getRgt());
         target.setIsPrivate(source.getIsPrivate());
         target.setClosedOn(source.getClosedOn());
+    }
+
+    /**
+     * 记录任务创建历史
+     * 在创建或复制任务后调用，记录任务创建事件
+     *
+     * @param issue 新创建的任务对象
+     */
+    private void recordIssueCreation(Issue issue) {
+        // 为创建操作添加默认说明
+        recordIssueCreation(issue, "任务已创建");
+    }
+
+    /**
+     * 记录任务创建历史（带备注）
+     * 在创建或复制任务后调用，记录任务创建事件
+     *
+     * @param issue 新创建的任务对象
+     * @param notes 备注信息（可选，如"从任务 #123 复制"）
+     */
+    private void recordIssueCreation(Issue issue, String notes) {
+        try {
+            // 获取当前用户
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+
+            // 创建 Journal 记录
+            Journal journal = new Journal();
+            journal.setJournalizedId(issue.getId().intValue());
+            journal.setJournalizedType("Issue");
+            journal.setUserId(currentUserId.intValue());
+            journal.setNotes(notes);
+            journal.setPrivateNotes(false);
+            journal.setCreatedOn(LocalDateTime.now());
+            journal.setUpdatedOn(LocalDateTime.now());
+
+            // 保存 Journal 记录
+            int journalInsertResult = journalMapper.insert(journal);
+            if (journalInsertResult <= 0) {
+                log.warn("创建活动日志失败，任务ID: {}", issue.getId());
+                return;
+            }
+
+            log.debug("记录任务创建历史成功，任务ID: {}, Journal ID: {}", issue.getId(), journal.getId());
+
+        } catch (Exception e) {
+            log.error("记录任务创建历史失败，任务ID: {}", issue.getId(), e);
+            // 不抛出异常，避免影响主流程
+        }
     }
 
     /**
