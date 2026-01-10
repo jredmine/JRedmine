@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 /**
@@ -27,11 +28,13 @@ public class EmailService {
 
     /**
      * 发送密码重置邮件
+     * 异步执行，不阻塞主线程
      *
      * @param toEmail    收件人邮箱
      * @param username   用户名
      * @param resetToken 重置Token
      */
+    @Async
     public void sendPasswordResetEmail(String toEmail, String username, String resetToken) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
@@ -67,6 +70,7 @@ public class EmailService {
 
     /**
      * 发送任务分配通知邮件
+     * 异步执行，不阻塞主线程
      *
      * @param toEmail      收件人邮箱
      * @param assigneeName 指派人姓名
@@ -75,6 +79,7 @@ public class EmailService {
      * @param projectName  项目名称
      * @param assignerName 分配人姓名（可选）
      */
+    @Async
     public void sendIssueAssignmentEmail(String toEmail, String assigneeName, Long issueId,
             String issueSubject, String projectName, String assignerName) {
         try {
@@ -127,6 +132,7 @@ public class EmailService {
 
     /**
      * 发送任务变更通知邮件
+     * 异步执行，不阻塞主线程
      *
      * @param toEmail      收件人邮箱
      * @param recipientName 收件人姓名
@@ -137,6 +143,7 @@ public class EmailService {
      * @param changesSummary 变更摘要
      * @param notes        备注信息（可选）
      */
+    @Async
     public void sendIssueUpdateEmail(String toEmail, String recipientName, Long issueId,
             String issueSubject, String projectName, String updaterName, 
             String changesSummary, String notes) {
