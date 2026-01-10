@@ -11,6 +11,8 @@ import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueJournalCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueJournalListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueWatcherBatchAddRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueWatcherBatchDeleteRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
@@ -169,7 +171,27 @@ public class IssueController {
         return ApiResponse.success("任务关联删除成功", null);
     }
 
-    @Operation(summary = "添加任务关注者", description = "添加任务关注者。关注者会收到任务更新通知。可以关注自己。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "批量添加任务关注者", description = "批量添加任务关注者。关注者会收到任务更新通知。可以关注自己。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @PostMapping("/{id}/watchers/batch")
+    public ApiResponse<Void> batchAddIssueWatchers(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueWatcherBatchAddRequestDTO requestDTO) {
+        issueService.batchAddIssueWatchers(id, requestDTO);
+        return ApiResponse.success("任务关注者批量添加成功", null);
+    }
+
+    @Operation(summary = "批量删除任务关注者", description = "批量删除任务关注者。只能删除自己的关注，或需要 edit_issues 权限。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @DeleteMapping("/{id}/watchers/batch")
+    public ApiResponse<Void> batchDeleteIssueWatchers(
+            @PathVariable Long id,
+            @Valid @RequestBody IssueWatcherBatchDeleteRequestDTO requestDTO) {
+        issueService.batchDeleteIssueWatchers(id, requestDTO);
+        return ApiResponse.success("任务关注者批量删除成功", null);
+    }
+
+    @Operation(summary = "添加任务关注者（单个）", description = "添加单个任务关注者。关注者会收到任务更新通知。可以关注自己。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
     @PostMapping("/{id}/watchers")
     public ApiResponse<Void> addIssueWatcher(
@@ -179,7 +201,7 @@ public class IssueController {
         return ApiResponse.success("任务关注者添加成功", null);
     }
 
-    @Operation(summary = "删除任务关注者", description = "删除任务关注者。只能删除自己的关注，或需要 edit_issues 权限。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "删除任务关注者（单个）", description = "删除单个任务关注者。只能删除自己的关注，或需要 edit_issues 权限。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
     @DeleteMapping("/{id}/watchers/{userId}")
     public ApiResponse<Void> deleteIssueWatcher(

@@ -17,6 +17,8 @@ import com.github.jredmine.dto.request.issue.IssueUpdateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueJournalCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueJournalListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueWatcherBatchAddRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueWatcherBatchDeleteRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -3451,6 +3453,212 @@ public class IssueService {
         } catch (Exception e) {
             log.error("任务关注者删除失败，任务ID: {}, 用户ID: {}", issueId, userId, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务关注者删除失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 批量添加任务关注者
+     *
+     * @param issueId    任务ID
+     * @param requestDTO 批量添加关注者请求
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void batchAddIssueWatchers(Long issueId, IssueWatcherBatchAddRequestDTO requestDTO) {
+        MDC.put("operation", "batch_add_issue_watchers");
+        MDC.put("issueId", String.valueOf(issueId));
+        MDC.put("userCount", String.valueOf(requestDTO.getUserIds().size()));
+
+        try {
+            log.info("开始批量添加任务关注者，任务ID: {}, 用户数量: {}", issueId, requestDTO.getUserIds().size());
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+            }
+
+            int addedCount = 0;
+            int skippedCount = 0;
+            List<String> errors = new ArrayList<>();
+
+            // 批量处理每个用户
+            for (Long userId : requestDTO.getUserIds()) {
+                try {
+                    // 验证用户是否存在
+                    User watcherUser = userMapper.selectById(userId);
+                    if (watcherUser == null) {
+                        log.warn("用户不存在，用户ID: {}", userId);
+                        errors.add("用户 ID " + userId + " 不存在");
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // 检查是否已经是关注者
+                    LambdaQueryWrapper<Watcher> checkQuery = new LambdaQueryWrapper<>();
+                    checkQuery.eq(Watcher::getWatchableType, "Issue")
+                            .eq(Watcher::getWatchableId, issueId.intValue())
+                            .eq(Watcher::getUserId, userId.intValue());
+                    Watcher existingWatcher = watcherMapper.selectOne(checkQuery);
+                    if (existingWatcher != null) {
+                        log.debug("用户已经是任务关注者，任务ID: {}, 用户ID: {}", issueId, userId);
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // 创建关注者记录
+                    Watcher watcher = new Watcher();
+                    watcher.setWatchableType("Issue");
+                    watcher.setWatchableId(issueId.intValue());
+                    watcher.setUserId(userId.intValue());
+
+                    int insertResult = watcherMapper.insert(watcher);
+                    if (insertResult > 0) {
+                        addedCount++;
+                        log.debug("添加任务关注者成功，任务ID: {}, 用户ID: {}", issueId, userId);
+                    } else {
+                        errors.add("用户 ID " + userId + " 添加失败");
+                        skippedCount++;
+                    }
+
+                } catch (Exception e) {
+                    log.error("添加任务关注者失败，任务ID: {}, 用户ID: {}", issueId, userId, e);
+                    errors.add("用户 ID " + userId + " 添加失败: " + e.getMessage());
+                    skippedCount++;
+                }
+            }
+
+            log.info("批量添加任务关注者完成，任务ID: {}, 成功: {}, 跳过: {}",
+                    issueId, addedCount, skippedCount);
+
+            // 如果有错误，记录到日志
+            if (!errors.isEmpty()) {
+                log.warn("批量添加任务关注者部分失败，任务ID: {}, 错误信息: {}", issueId, String.join("; ", errors));
+            }
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("批量添加任务关注者失败，任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "批量添加任务关注者失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 批量删除任务关注者
+     *
+     * @param issueId    任务ID
+     * @param requestDTO 批量删除关注者请求
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void batchDeleteIssueWatchers(Long issueId, IssueWatcherBatchDeleteRequestDTO requestDTO) {
+        MDC.put("operation", "batch_delete_issue_watchers");
+        MDC.put("issueId", String.valueOf(issueId));
+        MDC.put("userCount", String.valueOf(requestDTO.getUserIds().size()));
+
+        try {
+            log.info("开始批量删除任务关注者，任务ID: {}, 用户数量: {}", issueId, requestDTO.getUserIds().size());
+
+            // 查询任务是否存在
+            Issue issue = issueMapper.selectById(issueId);
+            if (issue == null) {
+                log.warn("任务不存在，任务ID: {}", issueId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务不存在");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 view_issues 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(), "view_issues")) {
+                    log.warn("用户无权限查看任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
+                            issueId, issue.getProjectId(), currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务，需要 view_issues 权限");
+                }
+            }
+
+            int deletedCount = 0;
+            int skippedCount = 0;
+            List<String> errors = new ArrayList<>();
+
+            // 批量处理每个用户
+            for (Long userId : requestDTO.getUserIds()) {
+                try {
+                    // 检查权限：如果删除的不是自己的关注，需要 edit_issues 权限
+                    boolean isDeletingSelf = currentUserId.equals(userId);
+                    if (!isAdmin && !isDeletingSelf) {
+                        if (!projectPermissionService.hasPermission(currentUserId, issue.getProjectId(),
+                                "edit_issues")) {
+                            log.warn("用户无权限删除其他用户的关注，任务ID: {}, 用户ID: {}", issueId, userId);
+                            errors.add("用户 ID " + userId + " 删除失败: 只能删除自己的关注，或需要 edit_issues 权限");
+                            skippedCount++;
+                            continue;
+                        }
+                    }
+
+                    // 查询关注者记录是否存在
+                    LambdaQueryWrapper<Watcher> queryWrapper = new LambdaQueryWrapper<>();
+                    queryWrapper.eq(Watcher::getWatchableType, "Issue")
+                            .eq(Watcher::getWatchableId, issueId.intValue())
+                            .eq(Watcher::getUserId, userId.intValue());
+                    Watcher watcher = watcherMapper.selectOne(queryWrapper);
+                    if (watcher == null) {
+                        log.debug("任务关注者不存在，任务ID: {}, 用户ID: {}", issueId, userId);
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // 删除关注者记录
+                    int deleteResult = watcherMapper.deleteById(watcher.getId());
+                    if (deleteResult > 0) {
+                        deletedCount++;
+                        log.debug("删除任务关注者成功，任务ID: {}, 用户ID: {}", issueId, userId);
+                    } else {
+                        errors.add("用户 ID " + userId + " 删除失败");
+                        skippedCount++;
+                    }
+
+                } catch (Exception e) {
+                    log.error("删除任务关注者失败，任务ID: {}, 用户ID: {}", issueId, userId, e);
+                    errors.add("用户 ID " + userId + " 删除失败: " + e.getMessage());
+                    skippedCount++;
+                }
+            }
+
+            log.info("批量删除任务关注者完成，任务ID: {}, 成功: {}, 跳过: {}",
+                    issueId, deletedCount, skippedCount);
+
+            // 如果有错误，记录到日志
+            if (!errors.isEmpty()) {
+                log.warn("批量删除任务关注者部分失败，任务ID: {}, 错误信息: {}", issueId, String.join("; ", errors));
+            }
+
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("批量删除任务关注者失败，任务ID: {}", issueId, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "批量删除任务关注者失败");
         } finally {
             MDC.clear();
         }
