@@ -1085,6 +1085,9 @@ public class IssueService {
             // 记录变更历史到 journals 表
             recordIssueChanges(oldIssue, issue, null);
 
+            // 发送邮件通知给相关人员
+            sendIssueUpdateNotification(issue, oldIssue, null);
+
             // 查询更新后的任务（包含关联信息）
             return getIssueDetailById(id);
         } catch (BusinessException e) {
@@ -1181,6 +1184,9 @@ public class IssueService {
 
                 // 记录变更历史到 journals 表
                 recordIssueChanges(oldIssue, issue, null);
+
+                // 发送邮件通知给相关人员
+                sendIssueUpdateNotification(issue, oldIssue, null);
 
                 // 查询更新后的任务详情
                 IssueDetailResponseDTO detailDTO = getIssueDetailById(issue.getId());
@@ -2544,6 +2550,9 @@ public class IssueService {
             // 包括备注信息（requestDTO.getNotes()）
             recordIssueChanges(oldIssue, issue, requestDTO.getNotes());
 
+            // 发送邮件通知给相关人员
+            sendIssueUpdateNotification(issue, oldIssue, requestDTO.getNotes());
+
             // 查询更新后的任务（包含关联信息）
             return getIssueDetailById(id);
         } catch (BusinessException e) {
@@ -2968,6 +2977,9 @@ public class IssueService {
                     log.error("发送任务分配通知邮件失败，任务ID: {}, 指派人ID: {}", id, assignedToId, e);
                 }
             }
+
+            // 发送通用的更新通知给创建人和关注者
+            sendIssueUpdateNotification(issue, oldIssue, null);
 
             // 查询更新后的任务（包含关联信息）
             return getIssueDetailById(id);
@@ -4591,5 +4603,171 @@ public class IssueService {
         issueMapper.update(null, updateRgtWrapper);
 
         log.info("删除任务后的树形结构更新完成，任务ID: {}", issue.getId());
+    }
+
+    /**
+     * 发送任务变更通知给相关人员
+     * 包括：创建人、被指派人、关注者
+     *
+     * @param issue    任务对象
+     * @param oldIssue 旧任务对象（用于对比变更）
+     * @param notes    备注信息（可选）
+     */
+    private void sendIssueUpdateNotification(Issue issue, Issue oldIssue, String notes) {
+        try {
+            // 获取当前用户
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            String updaterName = getUserDisplayName(currentUser);
+
+            // 获取项目信息
+            Project project = projectMapper.selectById(issue.getProjectId());
+            String projectName = project != null ? project.getName() : "未知项目";
+
+            // 生成变更摘要
+            String changesSummary = generateChangesSummary(oldIssue, issue);
+
+            // 收集需要通知的用户ID（避免重复）
+            Set<Long> recipientIds = new java.util.HashSet<>();
+
+            // 1. 添加创建人（如果不是当前用户）
+            if (issue.getAuthorId() != null && !issue.getAuthorId().equals(currentUserId)) {
+                recipientIds.add(issue.getAuthorId());
+            }
+
+            // 2. 添加被指派人（如果不是当前用户）
+            if (issue.getAssignedToId() != null && !issue.getAssignedToId().equals(currentUserId)) {
+                recipientIds.add(issue.getAssignedToId());
+            }
+
+            // 3. 添加关注者
+            LambdaQueryWrapper<Watcher> watcherQuery = new LambdaQueryWrapper<>();
+            watcherQuery.eq(Watcher::getWatchableType, "Issue")
+                    .eq(Watcher::getWatchableId, issue.getId());
+            List<Watcher> watchers = watcherMapper.selectList(watcherQuery);
+            for (Watcher watcher : watchers) {
+                Long watcherUserId = watcher.getUserId().longValue();
+                // 排除当前用户
+                if (!watcherUserId.equals(currentUserId)) {
+                    recipientIds.add(watcherUserId);
+                }
+            }
+
+            // 发送邮件给所有收件人
+            for (Long recipientId : recipientIds) {
+                try {
+                    User recipient = userMapper.selectById(recipientId);
+                    if (recipient == null) {
+                        continue;
+                    }
+
+                    // 检查用户是否启用了邮件通知
+                    LambdaQueryWrapper<EmailAddress> emailQuery = new LambdaQueryWrapper<>();
+                    emailQuery.eq(EmailAddress::getUserId, recipientId)
+                            .eq(EmailAddress::getNotify, true);
+                    EmailAddress emailAddress = emailAddressMapper.selectOne(emailQuery);
+
+                    if (emailAddress != null && emailAddress.getAddress() != null
+                            && !emailAddress.getAddress().trim().isEmpty()) {
+                        String recipientName = getUserDisplayName(recipient);
+
+                        // 发送邮件通知
+                        emailService.sendIssueUpdateEmail(
+                                emailAddress.getAddress(),
+                                recipientName,
+                                issue.getId(),
+                                issue.getSubject(),
+                                projectName,
+                                updaterName,
+                                changesSummary,
+                                notes);
+
+                        log.debug("任务更新通知邮件已发送，任务ID: {}, 收件人ID: {}, 邮箱: {}",
+                                issue.getId(), recipientId, emailAddress.getAddress());
+                    }
+                } catch (Exception e) {
+                    // 单个邮件发送失败不影响其他邮件
+                    log.error("发送任务更新通知邮件失败，任务ID: {}, 收件人ID: {}", issue.getId(), recipientId, e);
+                }
+            }
+
+            if (!recipientIds.isEmpty()) {
+                log.info("任务更新通知已发送给 {} 位用户，任务ID: {}", recipientIds.size(), issue.getId());
+            }
+
+        } catch (Exception e) {
+            // 邮件发送失败不应该影响任务更新流程，只记录错误日志
+            log.error("发送任务更新通知邮件失败，任务ID: {}", issue.getId(), e);
+        }
+    }
+
+    /**
+     * 获取用户显示名称
+     *
+     * @param user 用户对象
+     * @return 用户显示名称
+     */
+    private String getUserDisplayName(User user) {
+        if (user == null) {
+            return "未知用户";
+        }
+        String displayName = user.getFirstname() + " " + user.getLastname();
+        displayName = displayName.trim();
+        if (displayName.isEmpty()) {
+            displayName = user.getLogin();
+        }
+        return displayName;
+    }
+
+    /**
+     * 生成变更摘要
+     *
+     * @param oldIssue 旧任务对象
+     * @param newIssue 新任务对象
+     * @return 变更摘要字符串
+     */
+    private String generateChangesSummary(Issue oldIssue, Issue newIssue) {
+        StringBuilder summary = new StringBuilder();
+
+        // 状态变更
+        if (!Objects.equals(oldIssue.getStatusId(), newIssue.getStatusId())) {
+            String oldStatus = oldIssue.getStatusId() != null ? getStatusName(oldIssue.getStatusId()) : "无";
+            String newStatus = newIssue.getStatusId() != null ? getStatusName(newIssue.getStatusId()) : "无";
+            summary.append(String.format("- 状态: %s → %s\n", oldStatus, newStatus));
+        }
+
+        // 指派人变更
+        if (!Objects.equals(oldIssue.getAssignedToId(), newIssue.getAssignedToId())) {
+            String oldAssignee = oldIssue.getAssignedToId() != null ? getUserName(oldIssue.getAssignedToId()) : "无";
+            String newAssignee = newIssue.getAssignedToId() != null ? getUserName(newIssue.getAssignedToId()) : "无";
+            summary.append(String.format("- 指派人: %s → %s\n", oldAssignee, newAssignee));
+        }
+
+        // 优先级变更
+        if (!Objects.equals(oldIssue.getPriorityId(), newIssue.getPriorityId())) {
+            String oldPriority = oldIssue.getPriorityId() != null ? getPriorityName(oldIssue.getPriorityId()) : "无";
+            String newPriority = newIssue.getPriorityId() != null ? getPriorityName(newIssue.getPriorityId()) : "无";
+            summary.append(String.format("- 优先级: %s → %s\n", oldPriority, newPriority));
+        }
+
+        // 完成度变更
+        if (!Objects.equals(oldIssue.getDoneRatio(), newIssue.getDoneRatio())) {
+            String oldRatio = oldIssue.getDoneRatio() != null ? oldIssue.getDoneRatio() + "%" : "0%";
+            String newRatio = newIssue.getDoneRatio() != null ? newIssue.getDoneRatio() + "%" : "0%";
+            summary.append(String.format("- 完成度: %s → %s\n", oldRatio, newRatio));
+        }
+
+        // 截止日期变更
+        if (!Objects.equals(oldIssue.getDueDate(), newIssue.getDueDate())) {
+            String oldDate = oldIssue.getDueDate() != null ? oldIssue.getDueDate().toString() : "无";
+            String newDate = newIssue.getDueDate() != null ? newIssue.getDueDate().toString() : "无";
+            summary.append(String.format("- 截止日期: %s → %s\n", oldDate, newDate));
+        }
+
+        if (summary.length() == 0) {
+            return "任务已更新";
+        }
+
+        return summary.toString();
     }
 }

@@ -124,4 +124,79 @@ public class EmailService {
             log.error("任务分配通知邮件发送失败，收件人: {}, 任务ID: {}", toEmail, issueId, e);
         }
     }
+
+    /**
+     * 发送任务变更通知邮件
+     *
+     * @param toEmail      收件人邮箱
+     * @param recipientName 收件人姓名
+     * @param issueId      任务ID
+     * @param issueSubject 任务标题
+     * @param projectName  项目名称
+     * @param updaterName  更新人姓名
+     * @param changesSummary 变更摘要
+     * @param notes        备注信息（可选）
+     */
+    public void sendIssueUpdateEmail(String toEmail, String recipientName, Long issueId,
+            String issueSubject, String projectName, String updaterName, 
+            String changesSummary, String notes) {
+        try {
+            // 检查邮件配置是否有效
+            if (fromEmail == null || fromEmail.trim().isEmpty()) {
+                log.warn("邮件配置未设置（spring.mail.username），跳过邮件发送，任务ID: {}", issueId);
+                return;
+            }
+
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(toEmail);
+            message.setSubject(String.format("任务更新通知 - %s", issueSubject));
+
+            StringBuilder emailContent = new StringBuilder();
+            emailContent.append(String.format(
+                    """
+                            您好 %s，
+                            
+                            任务已更新：
+                            
+                            任务ID: #%d
+                            任务标题: %s
+                            所属项目: %s
+                            更新人: %s
+                            """,
+                    recipientName, issueId, issueSubject, projectName, updaterName));
+
+            // 添加变更摘要
+            if (changesSummary != null && !changesSummary.trim().isEmpty()) {
+                emailContent.append("\n变更内容:\n");
+                emailContent.append(changesSummary);
+                emailContent.append("\n");
+            }
+
+            // 添加备注信息
+            if (notes != null && !notes.trim().isEmpty()) {
+                emailContent.append("\n备注: ");
+                emailContent.append(notes);
+                emailContent.append("\n");
+            }
+
+            emailContent.append("""
+                    
+                    请查看任务详情。
+                    
+                    此邮件由系统自动发送，请勿回复。""");
+
+            message.setText(emailContent.toString());
+
+            mailSender.send(message);
+            log.info("任务更新通知邮件发送成功，收件人: {}, 任务ID: {}", toEmail, issueId);
+        } catch (org.springframework.mail.MailException e) {
+            // 邮件发送失败不应该影响任务更新流程，只记录错误日志
+            log.error("任务更新通知邮件发送失败，收件人: {}, 任务ID: {}。错误: {}。请检查邮件服务器配置（spring.mail.host, spring.mail.port等）",
+                    toEmail, issueId, e.getMessage(), e);
+        } catch (Exception e) {
+            // 其他异常
+            log.error("任务更新通知邮件发送失败，收件人: {}, 任务ID: {}", toEmail, issueId, e);
+        }
+    }
 }
