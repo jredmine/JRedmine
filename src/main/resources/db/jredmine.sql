@@ -600,8 +600,10 @@ CREATE TABLE `projects` (
 -- ----------------------------
 DROP TABLE IF EXISTS `projects_trackers`;
 CREATE TABLE `projects_trackers` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
   `project_id` int NOT NULL DEFAULT '0',
   `tracker_id` int NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`),
   UNIQUE KEY `projects_trackers_unique` (`project_id`,`tracker_id`),
   KEY `projects_trackers_project_id` (`project_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -611,8 +613,10 @@ CREATE TABLE `projects_trackers` (
 -- ----------------------------
 DROP TABLE IF EXISTS `project_template_roles`;
 CREATE TABLE `project_template_roles` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
   `project_id` int NOT NULL DEFAULT '0',
   `role_id` int NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`),
   UNIQUE KEY `project_template_roles_unique` (`project_id`,`role_id`),
   KEY `project_template_roles_project_id` (`project_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -696,8 +700,10 @@ CREATE TABLE `roles` (
 -- ----------------------------
 DROP TABLE IF EXISTS `roles_managed_roles`;
 CREATE TABLE `roles_managed_roles` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
   `role_id` int NOT NULL,
   `managed_role_id` int NOT NULL,
+  PRIMARY KEY (`id`),
   UNIQUE KEY `index_roles_managed_roles_on_role_id_and_managed_role_id` (`role_id`,`managed_role_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
