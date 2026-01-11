@@ -226,6 +226,14 @@ public class IssueController {
         return ApiResponse.success("任务关联创建成功", result);
     }
 
+    @Operation(summary = "获取任务关联关系列表", description = "获取任务的所有关联关系（包括源关联和目标关联）。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/{id}/relations")
+    public ApiResponse<List<IssueRelationResponseDTO>> getIssueRelations(@PathVariable Long id) {
+        List<IssueRelationResponseDTO> result = issueService.getIssueRelations(id);
+        return ApiResponse.success(result);
+    }
+
     @Operation(summary = "删除任务关联", description = "删除任务关联关系。需要认证，需要 edit_issues 权限或系统管理员。只能删除属于该任务的关联（无论是源任务还是目标任务）。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_issues')")
     @DeleteMapping("/{id}/relations/{relationId}")

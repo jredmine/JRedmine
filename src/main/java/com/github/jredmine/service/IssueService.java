@@ -51,6 +51,7 @@ import com.github.jredmine.entity.Enumeration;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.enums.WorkflowRule;
 import com.github.jredmine.enums.WorkflowType;
+import com.github.jredmine.enums.IssueRelationType;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.issue.IssueCategoryMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
@@ -1457,6 +1458,10 @@ public class IssueService {
                 dto.setFixedVersionName(version.getName());
             }
         }
+
+        // 填充任务关联关系
+        List<IssueRelationResponseDTO> relations = getIssueRelations(issue.getId());
+        dto.setRelations(relations);
     }
 
     /**
@@ -3580,7 +3585,7 @@ public class IssueService {
         MDC.put("operation", "create_issue_relation");
         MDC.put("issueId", String.valueOf(issueId));
         MDC.put("targetIssueId", String.valueOf(requestDTO.getTargetIssueId()));
-        MDC.put("relationType", requestDTO.getRelationType());
+        MDC.put("relationType", requestDTO.getRelationType().getCode());
 
         try {
             log.info("开始创建任务关联，源任务ID: {}, 目标任务ID: {}, 关联类型: {}",
@@ -3621,17 +3626,16 @@ public class IssueService {
                 }
             }
 
-            // 验证关联类型
-            String relationType = requestDTO.getRelationType();
-            if (relationType == null || relationType.trim().isEmpty()) {
+            // 验证关联类型（现在使用枚举，已经由框架自动验证）
+            IssueRelationType relationType = requestDTO.getRelationType();
+            if (relationType == null) {
                 log.warn("关联类型不能为空");
                 throw new BusinessException(ResultCode.PARAM_INVALID, "关联类型不能为空");
             }
 
             // 验证延迟天数（仅用于 precedes/follows 类型）
-            // delay 为 null 或 0 时允许，只有当 delay > 0 且关联类型不是 precedes/follows 时才报错
             Integer delay = requestDTO.getDelay();
-            if (delay != null && delay > 0 && !relationType.equals("precedes") && !relationType.equals("follows")) {
+            if (delay != null && delay > 0 && !relationType.supportsDelay()) {
                 log.warn("延迟天数仅用于 precedes/follows 类型，关联类型: {}, 延迟天数: {}", relationType, delay);
                 throw new BusinessException(ResultCode.PARAM_INVALID, "延迟天数仅用于 precedes/follows 类型");
             }
@@ -3640,7 +3644,7 @@ public class IssueService {
             LambdaQueryWrapper<IssueRelation> checkQuery = new LambdaQueryWrapper<>();
             checkQuery.eq(IssueRelation::getIssueFromId, issueId.intValue())
                     .eq(IssueRelation::getIssueToId, requestDTO.getTargetIssueId().intValue())
-                    .eq(IssueRelation::getRelationType, relationType);
+                    .eq(IssueRelation::getRelationType, relationType.getCode());
             IssueRelation existingRelation = issueRelationMapper.selectOne(checkQuery);
             if (existingRelation != null) {
                 log.warn("任务关联已存在，源任务ID: {}, 目标任务ID: {}, 关联类型: {}",
@@ -3652,7 +3656,7 @@ public class IssueService {
             IssueRelation relation = new IssueRelation();
             relation.setIssueFromId(issueId.intValue());
             relation.setIssueToId(requestDTO.getTargetIssueId().intValue());
-            relation.setRelationType(relationType);
+            relation.setRelationType(relationType.getCode());
             relation.setDelay(delay);
 
             int insertResult = issueRelationMapper.insert(relation);
@@ -3670,7 +3674,7 @@ public class IssueService {
             responseDTO.setIssueFromSubject(sourceIssue.getSubject());
             responseDTO.setIssueToId(requestDTO.getTargetIssueId());
             responseDTO.setIssueToSubject(targetIssue.getSubject());
-            responseDTO.setRelationType(relationType);
+            responseDTO.setRelationType(relationType.getCode());
             responseDTO.setDelay(delay);
 
             return responseDTO;
@@ -5686,5 +5690,76 @@ public class IssueService {
         }
 
         return dto;
+    }
+
+    /**
+     * 获取任务的所有关联关系
+     *
+     * @param issueId 任务ID
+     * @return 关联关系列表
+     */
+    public List<IssueRelationResponseDTO> getIssueRelations(Long issueId) {
+        log.debug("查询任务关联关系，任务ID: {}", issueId);
+
+        List<IssueRelationResponseDTO> relations = new ArrayList<>();
+
+        // 查询该任务作为源任务的关联关系（issue_from_id = issueId）
+        List<IssueRelation> fromRelations = issueRelationMapper.selectList(
+                new LambdaQueryWrapper<IssueRelation>()
+                        .eq(IssueRelation::getIssueFromId, issueId.intValue()));
+
+        for (IssueRelation relation : fromRelations) {
+            IssueRelationResponseDTO dto = new IssueRelationResponseDTO();
+            dto.setId(relation.getId());
+            dto.setIssueFromId(issueId);
+            dto.setIssueToId(Long.valueOf(relation.getIssueToId()));
+            dto.setRelationType(relation.getRelationType());
+            dto.setDelay(relation.getDelay());
+
+            // 填充源任务标题
+            Issue fromIssue = issueMapper.selectById(issueId);
+            if (fromIssue != null) {
+                dto.setIssueFromSubject(fromIssue.getSubject());
+            }
+
+            // 填充目标任务标题
+            Issue toIssue = issueMapper.selectById(relation.getIssueToId());
+            if (toIssue != null) {
+                dto.setIssueToSubject(toIssue.getSubject());
+            }
+
+            relations.add(dto);
+        }
+
+        // 查询该任务作为目标任务的关联关系（issue_to_id = issueId）
+        List<IssueRelation> toRelations = issueRelationMapper.selectList(
+                new LambdaQueryWrapper<IssueRelation>()
+                        .eq(IssueRelation::getIssueToId, issueId.intValue()));
+
+        for (IssueRelation relation : toRelations) {
+            IssueRelationResponseDTO dto = new IssueRelationResponseDTO();
+            dto.setId(relation.getId());
+            dto.setIssueFromId(Long.valueOf(relation.getIssueFromId()));
+            dto.setIssueToId(issueId);
+            dto.setRelationType(relation.getRelationType());
+            dto.setDelay(relation.getDelay());
+
+            // 填充源任务标题
+            Issue fromIssue = issueMapper.selectById(relation.getIssueFromId());
+            if (fromIssue != null) {
+                dto.setIssueFromSubject(fromIssue.getSubject());
+            }
+
+            // 填充目标任务标题
+            Issue toIssue = issueMapper.selectById(issueId);
+            if (toIssue != null) {
+                dto.setIssueToSubject(toIssue.getSubject());
+            }
+
+            relations.add(dto);
+        }
+
+        log.debug("查询到关联关系数量: {}", relations.size());
+        return relations;
     }
 }

@@ -163,4 +163,9 @@ public class IssueDetailResponseDTO {
      */
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
     private LocalDateTime closedOn;
+    
+    /**
+     * 任务关联关系列表（所有类型）
+     */
+    private java.util.List<IssueRelationResponseDTO> relations;
 }
