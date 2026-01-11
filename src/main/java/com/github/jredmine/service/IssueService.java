@@ -19,6 +19,7 @@ import com.github.jredmine.dto.request.issue.IssueJournalListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherBatchAddRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherBatchDeleteRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueGanttRequestDTO;
 import com.github.jredmine.dto.response.workflow.AvailableTransitionDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -30,6 +31,9 @@ import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueImportResultDTO;
+import com.github.jredmine.dto.response.issue.IssueGanttResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueGanttItemResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueGanttDependencyDTO;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueCategory;
@@ -77,6 +81,7 @@ import com.github.jredmine.entity.Member;
 import com.github.jredmine.entity.MemberRole;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.user.MemberRoleMapper;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -5425,5 +5430,261 @@ public class IssueService {
         }
 
         return summary.toString();
+    }
+
+    /**
+     * 获取任务甘特图数据
+     *
+     * @param requestDTO 甘特图查询请求
+     * @return 甘特图数据
+     */
+    public IssueGanttResponseDTO getIssueGantt(IssueGanttRequestDTO requestDTO) {
+        MDC.put("operation", "get_issue_gantt");
+        MDC.put("projectId", String.valueOf(requestDTO.getProjectId()));
+
+        try {
+            log.debug("开始查询任务甘特图，项目ID: {}", requestDTO.getProjectId());
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(requestDTO.getProjectId());
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", requestDTO.getProjectId());
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "项目不存在");
+            }
+
+            // 权限验证：需要 view_issues 权限
+            User currentUser = securityUtils.getCurrentUser();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+            if (!isAdmin) {
+                // 检查用户在项目中是否拥有 view_issues 权限
+                if (!projectPermissionService.hasPermission(currentUser.getId(), requestDTO.getProjectId(),
+                        "view_issues")) {
+                    log.warn("用户无权限查看项目任务甘特图，项目ID: {}, 用户ID: {}", requestDTO.getProjectId(), currentUser.getId());
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看项目任务，需要 view_issues 权限");
+                }
+            }
+
+            // 构建查询条件
+            List<Long> projectIds = new ArrayList<>();
+            projectIds.add(requestDTO.getProjectId());
+
+            // 如果需要包含子项目
+            if (Boolean.TRUE.equals(requestDTO.getIncludeSubprojects())) {
+                List<Long> subProjectIds = getSubProjectIds(requestDTO.getProjectId());
+                projectIds.addAll(subProjectIds);
+            }
+
+            // 查询任务
+            LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.in(Issue::getProjectId, projectIds);
+
+            // 应用筛选条件（只有不为null且不为0时才添加条件）
+            if (requestDTO.getVersionId() != null && requestDTO.getVersionId() > 0) {
+                queryWrapper.eq(Issue::getFixedVersionId, requestDTO.getVersionId());
+            }
+            if (requestDTO.getTrackerId() != null && requestDTO.getTrackerId() > 0) {
+                queryWrapper.eq(Issue::getTrackerId, requestDTO.getTrackerId());
+            }
+            if (requestDTO.getStatusId() != null && requestDTO.getStatusId() > 0) {
+                queryWrapper.eq(Issue::getStatusId, requestDTO.getStatusId());
+            }
+            if (requestDTO.getAssignedToId() != null && requestDTO.getAssignedToId() > 0) {
+                queryWrapper.eq(Issue::getAssignedToId, requestDTO.getAssignedToId());
+            }
+            if (requestDTO.getStartDateFrom() != null) {
+                queryWrapper.ge(Issue::getStartDate, requestDTO.getStartDateFrom());
+            }
+            if (requestDTO.getDueDateTo() != null) {
+                queryWrapper.le(Issue::getDueDate, requestDTO.getDueDateTo());
+            }
+
+            // 如果只显示有日期的任务
+            if (Boolean.TRUE.equals(requestDTO.getOnlyWithDates())) {
+                queryWrapper.and(w -> w.isNotNull(Issue::getStartDate).or().isNotNull(Issue::getDueDate));
+            }
+
+            // 私有任务可见性处理
+            if (!isAdmin) {
+                // 获取当前用户在相关项目中的成员身份
+                List<Member> members = memberMapper.selectList(
+                        new LambdaQueryWrapper<Member>()
+                                .eq(Member::getUserId, currentUser.getId())
+                                .in(Member::getProjectId, projectIds));
+
+                if (members.isEmpty()) {
+                    // 如果不是任何项目的成员，只能看非私有任务
+                    queryWrapper.eq(Issue::getIsPrivate, false);
+                } else {
+                    // 如果是项目成员，可以看所有任务（私有和非私有）
+                    // 不需要额外过滤
+                }
+            }
+
+            // 按左值排序（树形结构顺序）
+            queryWrapper.orderByAsc(Issue::getRootId, Issue::getLft);
+
+            List<Issue> issues = issueMapper.selectList(queryWrapper);
+
+            log.debug("查询到任务数量: {}", issues.size());
+
+            // 查询所有任务的关联关系（用于依赖关系）
+            List<Long> issueIds = issues.stream().map(Issue::getId).collect(Collectors.toList());
+            Map<Long, List<IssueRelation>> issueRelationsMap = new HashMap<>();
+            if (!issueIds.isEmpty()) {
+                List<IssueRelation> relations = issueRelationMapper.selectList(
+                        new LambdaQueryWrapper<IssueRelation>()
+                                .in(IssueRelation::getIssueFromId, issueIds)
+                                .in(IssueRelation::getRelationType,
+                                        List.of("precedes", "follows", "blocks", "blocked")));
+
+                // 按源任务分组
+                issueRelationsMap = relations.stream()
+                        .collect(Collectors.groupingBy(r -> Long.valueOf(r.getIssueFromId())));
+            }
+
+            // 转换为甘特图项
+            List<IssueGanttItemResponseDTO> ganttItems = new ArrayList<>();
+            LocalDate minStartDate = null;
+            LocalDate maxDueDate = null;
+
+            for (Issue issue : issues) {
+                IssueGanttItemResponseDTO item = toIssueGanttItemDTO(issue, issueRelationsMap.get(issue.getId()));
+                ganttItems.add(item);
+
+                // 计算甘特图的起止日期
+                if (issue.getStartDate() != null) {
+                    if (minStartDate == null || issue.getStartDate().isBefore(minStartDate)) {
+                        minStartDate = issue.getStartDate();
+                    }
+                }
+                if (issue.getDueDate() != null) {
+                    if (maxDueDate == null || issue.getDueDate().isAfter(maxDueDate)) {
+                        maxDueDate = issue.getDueDate();
+                    }
+                }
+            }
+
+            // 构建响应
+            IssueGanttResponseDTO response = IssueGanttResponseDTO.builder()
+                    .tasks(ganttItems)
+                    .ganttStartDate(minStartDate)
+                    .ganttEndDate(maxDueDate)
+                    .totalCount(ganttItems.size())
+                    .build();
+
+            log.info("任务甘特图查询成功，项目ID: {}, 任务数量: {}", requestDTO.getProjectId(), ganttItems.size());
+            return response;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("任务甘特图查询失败，项目ID: {}", requestDTO.getProjectId(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "任务甘特图查询失败");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 获取子项目ID列表
+     *
+     * @param projectId 父项目ID
+     * @return 子项目ID列表
+     */
+    private List<Long> getSubProjectIds(Long projectId) {
+        // 通过树形结构查询所有子项目
+        Project parentProject = projectMapper.selectById(projectId);
+        if (parentProject == null || parentProject.getLft() == null || parentProject.getRgt() == null) {
+            return new ArrayList<>();
+        }
+
+        List<Project> subProjects = projectMapper.selectList(
+                new LambdaQueryWrapper<Project>()
+                        .gt(Project::getLft, parentProject.getLft())
+                        .lt(Project::getRgt, parentProject.getRgt()));
+
+        return subProjects.stream().map(Project::getId).collect(Collectors.toList());
+    }
+
+    /**
+     * 转换为甘特图项DTO
+     *
+     * @param issue     任务对象
+     * @param relations 任务的关联关系
+     * @return 甘特图项DTO
+     */
+    private IssueGanttItemResponseDTO toIssueGanttItemDTO(Issue issue, List<IssueRelation> relations) {
+        IssueGanttItemResponseDTO dto = IssueGanttItemResponseDTO.builder()
+                .id(issue.getId())
+                .subject(issue.getSubject())
+                .projectId(issue.getProjectId())
+                .trackerId(issue.getTrackerId())
+                .statusId(issue.getStatusId())
+                .priorityId(issue.getPriorityId())
+                .assignedToId(issue.getAssignedToId())
+                .parentId(issue.getParentId())
+                .startDate(issue.getStartDate())
+                .dueDate(issue.getDueDate())
+                .doneRatio(issue.getDoneRatio())
+                .estimatedHours(issue.getEstimatedHours())
+                .fixedVersionId(issue.getFixedVersionId())
+                .isMilestone(issue.getParentId() == null) // 顶级任务视为里程碑
+                .build();
+
+        // 填充项目名称
+        Project project = projectMapper.selectById(issue.getProjectId());
+        if (project != null) {
+            dto.setProjectName(project.getName());
+        }
+
+        // 填充跟踪器名称
+        Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+        if (tracker != null) {
+            dto.setTrackerName(tracker.getName());
+        }
+
+        // 填充状态名称和是否关闭
+        IssueStatus status = issueStatusMapper.selectById(issue.getStatusId());
+        if (status != null) {
+            dto.setStatusName(status.getName());
+            dto.setStatusClosed(status.getIsClosed());
+        }
+
+        // 填充优先级名称
+        if (issue.getPriorityId() != null) {
+            String priorityName = getPriorityName(issue.getPriorityId());
+            dto.setPriorityName(priorityName);
+        }
+
+        // 填充指派人名称
+        if (issue.getAssignedToId() != null) {
+            User assignedUser = userMapper.selectById(issue.getAssignedToId());
+            if (assignedUser != null) {
+                dto.setAssignedToName(getUserDisplayName(assignedUser));
+            }
+        }
+
+        // 填充版本名称
+        if (issue.getFixedVersionId() != null) {
+            Version version = versionMapper.selectById(issue.getFixedVersionId());
+            if (version != null) {
+                dto.setFixedVersionName(version.getName());
+            }
+        }
+
+        // 填充依赖关系
+        if (relations != null && !relations.isEmpty()) {
+            List<IssueGanttDependencyDTO> dependencies = relations.stream()
+                    .map(relation -> IssueGanttDependencyDTO.builder()
+                            .issueId(Long.valueOf(relation.getIssueToId()))
+                            .relationType(relation.getRelationType())
+                            .delay(relation.getDelay())
+                            .build())
+                    .collect(Collectors.toList());
+            dto.setDependencies(dependencies);
+        } else {
+            dto.setDependencies(new ArrayList<>());
+        }
+
+        return dto;
     }
 }

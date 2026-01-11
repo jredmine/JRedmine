@@ -13,6 +13,7 @@ import com.github.jredmine.dto.request.issue.IssueJournalListRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherCreateRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherBatchAddRequestDTO;
 import com.github.jredmine.dto.request.issue.IssueWatcherBatchDeleteRequestDTO;
+import com.github.jredmine.dto.request.issue.IssueGanttRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
@@ -22,6 +23,7 @@ import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueImportResultDTO;
+import com.github.jredmine.dto.response.issue.IssueGanttResponseDTO;
 import com.github.jredmine.dto.response.workflow.WorkflowTransitionResponseDTO;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
@@ -124,6 +126,15 @@ public class IssueController {
     public ApiResponse<IssueStatisticsResponseDTO> getIssueStatistics(
             @RequestParam(value = "projectId", required = false) Long projectId) {
         IssueStatisticsResponseDTO result = issueService.getIssueStatistics(projectId);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取任务甘特图数据", description = "获取任务的甘特图数据，包含任务的开始日期、截止日期、完成度、依赖关系等信息。支持按项目、版本、跟踪器、状态、指派人等条件筛选。支持包含子项目任务。需要认证，需要 view_issues 权限或系统管理员。私有任务仅项目成员可见。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/gantt")
+    public ApiResponse<IssueGanttResponseDTO> getIssueGantt(
+            @Valid IssueGanttRequestDTO requestDTO) {
+        IssueGanttResponseDTO result = issueService.getIssueGantt(requestDTO);
         return ApiResponse.success(result);
     }
 
