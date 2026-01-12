@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
 import com.github.jredmine.dto.response.project.ProjectSimpleResponseDTO;
 import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
 import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
@@ -123,6 +124,98 @@ public class TimeEntryService {
         }
         
         return convertToResponseDTO(timeEntry);
+    }
+    
+    /**
+     * 更新工时记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public TimeEntryResponseDTO updateTimeEntry(Long id, TimeEntryUpdateRequestDTO request) {
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAdmin = securityUtils.isAdmin();
+        MDC.put("userId", String.valueOf(currentUserId));
+        
+        // 1. 验证工时记录是否存在
+        TimeEntry timeEntry = timeEntryMapper.selectById(id);
+        if (timeEntry == null) {
+            throw new BusinessException("工时记录不存在");
+        }
+        
+        // 2. 权限检查：只能更新自己创建的记录，或者是管理员
+        if (!isAdmin && !timeEntry.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException("无权限修改此工时记录");
+        }
+        
+        // 3. 如果更新了项目ID，验证项目是否存在
+        if (request.getProjectId() != null) {
+            Project project = projectMapper.selectById(request.getProjectId());
+            if (project == null) {
+                throw new BusinessException("项目不存在");
+            }
+            timeEntry.setProjectId(request.getProjectId());
+        }
+        
+        // 4. 如果更新了任务ID，验证任务是否存在且属于该项目
+        if (request.getIssueId() != null) {
+            Issue issue = issueMapper.selectById(request.getIssueId());
+            if (issue == null) {
+                throw new BusinessException("任务不存在");
+            }
+            if (!issue.getProjectId().equals(timeEntry.getProjectId())) {
+                throw new BusinessException("任务不属于指定的项目");
+            }
+            timeEntry.setIssueId(request.getIssueId());
+        }
+        
+        // 5. 如果更新了工作人员ID，验证用户是否存在
+        if (request.getUserId() != null) {
+            User user = userMapper.selectById(request.getUserId());
+            if (user == null) {
+                throw new BusinessException("工作人员不存在");
+            }
+            timeEntry.setUserId(request.getUserId());
+        }
+        
+        // 6. 如果更新了活动类型，验证活动类型是否存在
+        if (request.getActivityId() != null) {
+            Enumeration activity = enumerationMapper.selectById(request.getActivityId());
+            if (activity == null || !"TimeEntryActivity".equals(activity.getType())) {
+                throw new BusinessException("活动类型不存在或类型不正确");
+            }
+            timeEntry.setActivityId(request.getActivityId());
+        }
+        
+        // 7. 更新工时
+        if (request.getHours() != null) {
+            timeEntry.setHours(request.getHours());
+        }
+        
+        // 8. 更新工作日期，需要重新计算年月周
+        if (request.getSpentOn() != null) {
+            LocalDate spentOn = request.getSpentOn();
+            timeEntry.setSpentOn(spentOn);
+            timeEntry.setTyear(spentOn.getYear());
+            timeEntry.setTmonth(spentOn.getMonthValue());
+            WeekFields weekFields = WeekFields.of(Locale.getDefault());
+            timeEntry.setTweek(spentOn.get(weekFields.weekOfWeekBasedYear()));
+        }
+        
+        // 9. 更新备注
+        if (request.getComments() != null) {
+            timeEntry.setComments(request.getComments());
+        }
+        
+        // 10. 更新时间戳
+        timeEntry.setUpdatedOn(LocalDateTime.now());
+        
+        // 11. 保存到数据库
+        timeEntryMapper.updateById(timeEntry);
+        
+        log.info("更新工时记录成功: id={}, projectId={}, userId={}, hours={}", 
+                timeEntry.getId(), timeEntry.getProjectId(), timeEntry.getUserId(), timeEntry.getHours());
+        
+        // 12. 返回详细信息
+        return getTimeEntryById(id);
     }
     
     /**

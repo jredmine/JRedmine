@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
 import com.github.jredmine.service.TimeEntryService;
@@ -45,5 +46,18 @@ public class TimeEntryController {
     public ApiResponse<TimeEntryResponseDTO> getTimeEntry(@PathVariable Long id) {
         TimeEntryResponseDTO result = timeEntryService.getTimeEntryById(id);
         return ApiResponse.success(result);
+    }
+    
+    /**
+     * 更新工时记录
+     */
+    @Operation(summary = "更新工时记录", description = "更新工时记录信息，只能更新自己创建的记录")
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_time_entries')")
+    public ApiResponse<TimeEntryResponseDTO> updateTimeEntry(
+            @PathVariable Long id,
+            @Valid @RequestBody TimeEntryUpdateRequestDTO request) {
+        TimeEntryResponseDTO result = timeEntryService.updateTimeEntry(id, request);
+        return ApiResponse.success("工时记录更新成功", result);
     }
 }
