@@ -308,6 +308,33 @@ public class TimeEntryService {
     }
     
     /**
+     * 删除工时记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteTimeEntry(Long id) {
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAdmin = securityUtils.isAdmin();
+        MDC.put("userId", String.valueOf(currentUserId));
+        
+        // 1. 验证工时记录是否存在
+        TimeEntry timeEntry = timeEntryMapper.selectById(id);
+        if (timeEntry == null) {
+            throw new BusinessException("工时记录不存在");
+        }
+        
+        // 2. 权限检查：只能删除自己创建的记录，或者是管理员
+        if (!isAdmin && !timeEntry.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException("无权限删除此工时记录");
+        }
+        
+        // 3. 删除工时记录
+        timeEntryMapper.deleteById(id);
+        
+        log.info("删除工时记录成功: id={}, projectId={}, userId={}, hours={}", 
+                id, timeEntry.getProjectId(), timeEntry.getUserId(), timeEntry.getHours());
+    }
+    
+    /**
      * 转换为响应DTO
      */
     private TimeEntryResponseDTO convertToResponseDTO(TimeEntry timeEntry) {

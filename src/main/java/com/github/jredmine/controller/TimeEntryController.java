@@ -73,4 +73,15 @@ public class TimeEntryController {
         TimeEntryResponseDTO result = timeEntryService.updateTimeEntry(id, request);
         return ApiResponse.success("工时记录更新成功", result);
     }
+    
+    /**
+     * 删除工时记录
+     */
+    @Operation(summary = "删除工时记录", description = "删除工时记录，只能删除自己创建的记录")
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_time_entries')")
+    public ApiResponse<Void> deleteTimeEntry(@PathVariable Long id) {
+        timeEntryService.deleteTimeEntry(id);
+        return ApiResponse.success("工时记录删除成功", null);
+    }
 }
