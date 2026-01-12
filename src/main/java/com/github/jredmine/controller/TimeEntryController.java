@@ -1,8 +1,10 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
 import com.github.jredmine.service.TimeEntryService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -25,6 +27,17 @@ import org.springframework.web.bind.annotation.*;
 public class TimeEntryController {
     
     private final TimeEntryService timeEntryService;
+    
+    /**
+     * 查询工时记录列表
+     */
+    @Operation(summary = "查询工时记录列表", description = "支持多条件筛选和分页")
+    @GetMapping
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<PageResponse<TimeEntryResponseDTO>> queryTimeEntries(TimeEntryQueryRequestDTO request) {
+        PageResponse<TimeEntryResponseDTO> result = timeEntryService.queryTimeEntries(request);
+        return ApiResponse.success(result);
+    }
     
     /**
      * 创建工时记录

@@ -1,8 +1,12 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectSimpleResponseDTO;
 import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
 import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
@@ -23,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.WeekFields;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -216,6 +221,90 @@ public class TimeEntryService {
         
         // 12. 返回详细信息
         return getTimeEntryById(id);
+    }
+    
+    /**
+     * 查询工时记录列表
+     */
+    public PageResponse<TimeEntryResponseDTO> queryTimeEntries(TimeEntryQueryRequestDTO request) {
+        // 1. 构建查询条件
+        LambdaQueryWrapper<TimeEntry> queryWrapper = new LambdaQueryWrapper<>();
+        
+        // 项目ID筛选
+        if (request.getProjectId() != null) {
+            queryWrapper.eq(TimeEntry::getProjectId, request.getProjectId());
+        }
+        
+        // 任务ID筛选
+        if (request.getIssueId() != null) {
+            queryWrapper.eq(TimeEntry::getIssueId, request.getIssueId());
+        }
+        
+        // 工作人员ID筛选
+        if (request.getUserId() != null) {
+            queryWrapper.eq(TimeEntry::getUserId, request.getUserId());
+        }
+        
+        // 活动类型ID筛选
+        if (request.getActivityId() != null) {
+            queryWrapper.eq(TimeEntry::getActivityId, request.getActivityId());
+        }
+        
+        // 日期范围筛选
+        if (request.getStartDate() != null) {
+            queryWrapper.ge(TimeEntry::getSpentOn, request.getStartDate());
+        }
+        if (request.getEndDate() != null) {
+            queryWrapper.le(TimeEntry::getSpentOn, request.getEndDate());
+        }
+        
+        // 年份筛选
+        if (request.getYear() != null) {
+            queryWrapper.eq(TimeEntry::getTyear, request.getYear());
+        }
+        
+        // 月份筛选
+        if (request.getMonth() != null) {
+            queryWrapper.eq(TimeEntry::getTmonth, request.getMonth());
+        }
+        
+        // 2. 排序
+        String sortBy = request.getSortBy();
+        String sortOrder = request.getSortOrder();
+        
+        boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
+        
+        switch (sortBy) {
+            case "spent_on":
+                queryWrapper.orderBy(true, isAsc, TimeEntry::getSpentOn);
+                break;
+            case "created_on":
+                queryWrapper.orderBy(true, isAsc, TimeEntry::getCreatedOn);
+                break;
+            case "hours":
+                queryWrapper.orderBy(true, isAsc, TimeEntry::getHours);
+                break;
+            default:
+                // 默认按工作日期降序
+                queryWrapper.orderByDesc(TimeEntry::getSpentOn);
+        }
+        
+        // 3. 分页查询
+        Page<TimeEntry> page = new Page<>(request.getPageNum(), request.getPageSize());
+        IPage<TimeEntry> pageResult = timeEntryMapper.selectPage(page, queryWrapper);
+        
+        // 4. 转换为响应DTO
+        List<TimeEntryResponseDTO> records = pageResult.getRecords().stream()
+                .map(this::convertToResponseDTO)
+                .toList();
+        
+        // 5. 返回分页结果
+        return PageResponse.of(
+                records,
+                pageResult.getTotal(),
+                pageResult.getCurrent(),
+                pageResult.getSize()
+        );
     }
     
     /**
