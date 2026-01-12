@@ -2,10 +2,13 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryStatisticsRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
+import com.github.jredmine.dto.response.timeentry.TimeEntryStatisticsResponseDTO;
+import com.github.jredmine.dto.response.timeentry.TimeEntrySummaryResponseDTO;
 import com.github.jredmine.service.TimeEntryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -83,5 +86,27 @@ public class TimeEntryController {
     public ApiResponse<Void> deleteTimeEntry(@PathVariable Long id) {
         timeEntryService.deleteTimeEntry(id);
         return ApiResponse.success("工时记录删除成功", null);
+    }
+    
+    /**
+     * 获取工时汇总统计
+     */
+    @Operation(summary = "获取工时汇总统计", description = "获取工时的总计、平均值、最大值、最小值等统计信息")
+    @GetMapping("/summary")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<TimeEntrySummaryResponseDTO> getTimeEntrySummary(TimeEntryStatisticsRequestDTO request) {
+        TimeEntrySummaryResponseDTO result = timeEntryService.getTimeEntrySummary(request);
+        return ApiResponse.success("工时汇总统计获取成功", result);
+    }
+    
+    /**
+     * 获取工时分组统计
+     */
+    @Operation(summary = "获取工时分组统计", description = "按项目、用户、活动类型或日期分组统计工时")
+    @GetMapping("/statistics")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<TimeEntryStatisticsResponseDTO> getTimeEntryStatistics(TimeEntryStatisticsRequestDTO request) {
+        TimeEntryStatisticsResponseDTO result = timeEntryService.getTimeEntryStatistics(request);
+        return ApiResponse.success("工时分组统计获取成功", result);
     }
 }

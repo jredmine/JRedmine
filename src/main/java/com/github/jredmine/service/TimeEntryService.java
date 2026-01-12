@@ -5,10 +5,13 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryStatisticsRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectSimpleResponseDTO;
 import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
+import com.github.jredmine.dto.response.timeentry.TimeEntryStatisticsResponseDTO;
+import com.github.jredmine.dto.response.timeentry.TimeEntrySummaryResponseDTO;
 import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
 import com.github.jredmine.entity.*;
 import com.github.jredmine.exception.BusinessException;
@@ -27,8 +30,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.WeekFields;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 工时记录服务
@@ -395,5 +402,247 @@ public class TimeEntryService {
         }
         
         return dto;
+    }
+    
+    /**
+     * 获取工时汇总统计
+     */
+    public TimeEntrySummaryResponseDTO getTimeEntrySummary(TimeEntryStatisticsRequestDTO request) {
+        MDC.put("method", "getTimeEntrySummary");
+        
+        // 1. 构建查询条件
+        LambdaQueryWrapper<TimeEntry> wrapper = buildStatisticsQueryWrapper(request);
+        
+        // 2. 查询所有符合条件的记录
+        List<TimeEntry> entries = timeEntryMapper.selectList(wrapper);
+        
+        if (entries.isEmpty()) {
+            return TimeEntrySummaryResponseDTO.builder()
+                    .totalHours(0f)
+                    .totalCount(0L)
+                    .averageHours(0f)
+                    .minHours(0f)
+                    .maxHours(0f)
+                    .build();
+        }
+        
+        // 3. 计算统计数据
+        Float totalHours = 0f;
+        Float minHours = Float.MAX_VALUE;
+        Float maxHours = 0f;
+        
+        for (TimeEntry entry : entries) {
+            Float hours = entry.getHours();
+            totalHours += hours;
+            if (hours < minHours) {
+                minHours = hours;
+            }
+            if (hours > maxHours) {
+                maxHours = hours;
+            }
+        }
+        
+        Long totalCount = (long) entries.size();
+        Float averageHours = totalHours / totalCount;
+        
+        log.info("工时汇总统计完成: totalHours={}, totalCount={}, averageHours={}", 
+                totalHours, totalCount, averageHours);
+        
+        return TimeEntrySummaryResponseDTO.builder()
+                .totalHours(Math.round(totalHours * 100) / 100f)
+                .totalCount(totalCount)
+                .averageHours(Math.round(averageHours * 100) / 100f)
+                .minHours(Math.round(minHours * 100) / 100f)
+                .maxHours(Math.round(maxHours * 100) / 100f)
+                .build();
+    }
+    
+    /**
+     * 获取工时分组统计
+     */
+    public TimeEntryStatisticsResponseDTO getTimeEntryStatistics(TimeEntryStatisticsRequestDTO request) {
+        MDC.put("method", "getTimeEntryStatistics");
+        MDC.put("groupBy", request.getGroupBy());
+        
+        // 1. 构建查询条件
+        LambdaQueryWrapper<TimeEntry> wrapper = buildStatisticsQueryWrapper(request);
+        
+        // 2. 查询所有符合条件的记录
+        List<TimeEntry> entries = timeEntryMapper.selectList(wrapper);
+        
+        if (entries.isEmpty()) {
+            return TimeEntryStatisticsResponseDTO.builder()
+                    .totalHours(0f)
+                    .totalCount(0L)
+                    .averageHours(0f)
+                    .groups(new ArrayList<>())
+                    .build();
+        }
+        
+        // 3. 计算总计
+        Float totalHours = entries.stream()
+                .map(TimeEntry::getHours)
+                .reduce(0f, Float::sum);
+        Long totalCount = (long) entries.size();
+        Float averageHours = totalHours / totalCount;
+        
+        // 4. 按指定维度分组统计
+        List<TimeEntryStatisticsResponseDTO.GroupStatistics> groups = 
+                groupStatistics(entries, request.getGroupBy(), totalHours);
+        
+        log.info("工时分组统计完成: groupBy={}, totalHours={}, groupCount={}", 
+                request.getGroupBy(), totalHours, groups.size());
+        
+        return TimeEntryStatisticsResponseDTO.builder()
+                .totalHours(Math.round(totalHours * 100) / 100f)
+                .totalCount(totalCount)
+                .averageHours(Math.round(averageHours * 100) / 100f)
+                .groups(groups)
+                .build();
+    }
+    
+    /**
+     * 构建统计查询条件
+     */
+    private LambdaQueryWrapper<TimeEntry> buildStatisticsQueryWrapper(TimeEntryStatisticsRequestDTO request) {
+        LambdaQueryWrapper<TimeEntry> wrapper = new LambdaQueryWrapper<>();
+        
+        // 项目筛选
+        if (request.getProjectId() != null) {
+            wrapper.eq(TimeEntry::getProjectId, request.getProjectId());
+        }
+        
+        // 任务筛选
+        if (request.getIssueId() != null) {
+            wrapper.eq(TimeEntry::getIssueId, request.getIssueId());
+        }
+        
+        // 用户筛选
+        if (request.getUserId() != null) {
+            wrapper.eq(TimeEntry::getUserId, request.getUserId());
+        }
+        
+        // 活动类型筛选
+        if (request.getActivityId() != null) {
+            wrapper.eq(TimeEntry::getActivityId, request.getActivityId());
+        }
+        
+        // 日期范围筛选
+        if (request.getStartDate() != null) {
+            wrapper.ge(TimeEntry::getSpentOn, request.getStartDate());
+        }
+        if (request.getEndDate() != null) {
+            wrapper.le(TimeEntry::getSpentOn, request.getEndDate());
+        }
+        
+        // 年份筛选
+        if (request.getYear() != null) {
+            wrapper.eq(TimeEntry::getTyear, request.getYear());
+        }
+        
+        // 月份筛选
+        if (request.getMonth() != null) {
+            wrapper.eq(TimeEntry::getTmonth, request.getMonth());
+        }
+        
+        return wrapper;
+    }
+    
+    /**
+     * 分组统计
+     */
+    private List<TimeEntryStatisticsResponseDTO.GroupStatistics> groupStatistics(
+            List<TimeEntry> entries, String groupBy, Float totalHours) {
+        
+        if (groupBy == null || groupBy.isEmpty()) {
+            groupBy = "project"; // 默认按项目分组
+        }
+        
+        Map<String, List<TimeEntry>> groupMap = new HashMap<>();
+        
+        // 根据不同维度分组
+        switch (groupBy.toLowerCase()) {
+            case "project":
+                groupMap = entries.stream()
+                        .collect(Collectors.groupingBy(e -> String.valueOf(e.getProjectId())));
+                break;
+                
+            case "user":
+                groupMap = entries.stream()
+                        .collect(Collectors.groupingBy(e -> String.valueOf(e.getUserId())));
+                break;
+                
+            case "activity":
+                groupMap = entries.stream()
+                        .collect(Collectors.groupingBy(e -> String.valueOf(e.getActivityId())));
+                break;
+                
+            case "date":
+                groupMap = entries.stream()
+                        .collect(Collectors.groupingBy(e -> e.getSpentOn().toString()));
+                break;
+                
+            default:
+                // 默认按项目分组
+                groupMap = entries.stream()
+                        .collect(Collectors.groupingBy(e -> String.valueOf(e.getProjectId())));
+                break;
+        }
+        
+        // 计算每组的统计数据
+        List<TimeEntryStatisticsResponseDTO.GroupStatistics> groups = new ArrayList<>();
+        
+        for (Map.Entry<String, List<TimeEntry>> entry : groupMap.entrySet()) {
+            String key = entry.getKey();
+            List<TimeEntry> groupEntries = entry.getValue();
+            
+            Float groupHours = groupEntries.stream()
+                    .map(TimeEntry::getHours)
+                    .reduce(0f, Float::sum);
+            
+            Long groupCount = (long) groupEntries.size();
+            Float percentage = (groupHours / totalHours) * 100;
+            
+            // 获取分组名称
+            String groupName = getGroupName(groupBy, key, groupEntries.get(0));
+            
+            groups.add(TimeEntryStatisticsResponseDTO.GroupStatistics.builder()
+                    .groupKey(key)
+                    .groupName(groupName)
+                    .hours(Math.round(groupHours * 100) / 100f)
+                    .count(groupCount)
+                    .percentage(Math.round(percentage * 100) / 100f)
+                    .build());
+        }
+        
+        // 按工时降序排序
+        groups.sort((a, b) -> Float.compare(b.getHours(), a.getHours()));
+        
+        return groups;
+    }
+    
+    /**
+     * 获取分组名称
+     */
+    private String getGroupName(String groupBy, String key, TimeEntry sampleEntry) {
+        switch (groupBy.toLowerCase()) {
+            case "project":
+                Project project = projectMapper.selectById(Long.valueOf(key));
+                return project != null ? project.getName() : "未知项目";
+                
+            case "user":
+                User user = userMapper.selectById(Long.valueOf(key));
+                return user != null ? user.getLogin() : "未知用户";
+                
+            case "activity":
+                Enumeration activity = enumerationMapper.selectById(Long.valueOf(key));
+                return activity != null ? activity.getName() : "未知活动类型";
+                
+            case "date":
+                return key; // 日期直接返回
+                
+            default:
+                return key;
+        }
     }
 }
