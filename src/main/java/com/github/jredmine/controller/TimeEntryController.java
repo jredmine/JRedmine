@@ -1,14 +1,9 @@
 package com.github.jredmine.controller;
 
-import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
-import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
-import com.github.jredmine.dto.request.timeentry.TimeEntryStatisticsRequestDTO;
-import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
+import com.github.jredmine.dto.request.timeentry.*;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
-import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
-import com.github.jredmine.dto.response.timeentry.TimeEntryStatisticsResponseDTO;
-import com.github.jredmine.dto.response.timeentry.TimeEntrySummaryResponseDTO;
+import com.github.jredmine.dto.response.timeentry.*;
 import com.github.jredmine.service.TimeEntryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -108,5 +103,38 @@ public class TimeEntryController {
     public ApiResponse<TimeEntryStatisticsResponseDTO> getTimeEntryStatistics(TimeEntryStatisticsRequestDTO request) {
         TimeEntryStatisticsResponseDTO result = timeEntryService.getTimeEntryStatistics(request);
         return ApiResponse.success("工时分组统计获取成功", result);
+    }
+    
+    /**
+     * 生成项目工时报表
+     */
+    @Operation(summary = "生成项目工时报表", description = "生成指定项目的详细工时报表，包含成员和活动类型分布")
+    @GetMapping("/reports/project")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<TimeEntryProjectReportDTO> generateProjectReport(TimeEntryReportRequestDTO request) {
+        TimeEntryProjectReportDTO result = timeEntryService.generateProjectReport(request);
+        return ApiResponse.success("项目工时报表生成成功", result);
+    }
+    
+    /**
+     * 生成用户工时报表
+     */
+    @Operation(summary = "生成用户工时报表", description = "生成指定用户的详细工时报表，包含项目和活动类型分布")
+    @GetMapping("/reports/user")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<TimeEntryUserReportDTO> generateUserReport(TimeEntryReportRequestDTO request) {
+        TimeEntryUserReportDTO result = timeEntryService.generateUserReport(request);
+        return ApiResponse.success("用户工时报表生成成功", result);
+    }
+    
+    /**
+     * 生成时间段工时报表
+     */
+    @Operation(summary = "生成时间段工时报表", description = "生成指定时间段的工时趋势报表，支持按日、周、月分组")
+    @GetMapping("/reports/period")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<TimeEntryPeriodReportDTO> generatePeriodReport(TimeEntryReportRequestDTO request) {
+        TimeEntryPeriodReportDTO result = timeEntryService.generatePeriodReport(request);
+        return ApiResponse.success("时间段工时报表生成成功", result);
     }
 }

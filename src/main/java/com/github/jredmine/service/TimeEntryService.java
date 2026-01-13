@@ -5,13 +5,12 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryReportRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryStatisticsRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectSimpleResponseDTO;
-import com.github.jredmine.dto.response.timeentry.TimeEntryResponseDTO;
-import com.github.jredmine.dto.response.timeentry.TimeEntryStatisticsResponseDTO;
-import com.github.jredmine.dto.response.timeentry.TimeEntrySummaryResponseDTO;
+import com.github.jredmine.dto.response.timeentry.*;
 import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
 import com.github.jredmine.entity.*;
 import com.github.jredmine.exception.BusinessException;
@@ -644,5 +643,459 @@ public class TimeEntryService {
             default:
                 return key;
         }
+    }
+    
+    /**
+     * 生成项目工时报表
+     */
+    public TimeEntryProjectReportDTO generateProjectReport(TimeEntryReportRequestDTO request) {
+        MDC.put("method", "generateProjectReport");
+        MDC.put("projectId", String.valueOf(request.getProjectId()));
+        
+        if (request.getProjectId() == null) {
+            throw new BusinessException("项目ID不能为空");
+        }
+        
+        // 1. 获取项目信息
+        Project project = projectMapper.selectById(request.getProjectId());
+        if (project == null) {
+            throw new BusinessException("项目不存在");
+        }
+        
+        // 2. 构建查询条件
+        LambdaQueryWrapper<TimeEntry> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(TimeEntry::getProjectId, request.getProjectId());
+        addDateRangeConditions(wrapper, request);
+        
+        // 3. 查询所有工时记录
+        List<TimeEntry> entries = timeEntryMapper.selectList(wrapper);
+        
+        if (entries.isEmpty()) {
+            return buildEmptyProjectReport(project);
+        }
+        
+        // 4. 计算基础统计数据
+        Float totalHours = entries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+        Long totalCount = (long) entries.size();
+        Long userCount = entries.stream().map(TimeEntry::getUserId).distinct().count();
+        Float averageHours = totalHours / totalCount;
+        
+        String earliestDate = entries.stream()
+                .map(e -> e.getSpentOn().toString())
+                .min(String::compareTo)
+                .orElse("");
+        String latestDate = entries.stream()
+                .map(e -> e.getSpentOn().toString())
+                .max(String::compareTo)
+                .orElse("");
+        
+        // 5. 按用户分组统计
+        Map<Long, List<TimeEntry>> userGroupMap = new HashMap<>();
+        for (TimeEntry entry : entries) {
+            userGroupMap.computeIfAbsent(entry.getUserId(), k -> new ArrayList<>()).add(entry);
+        }
+        
+        List<TimeEntryProjectReportDTO.UserTimeDetail> userDetails = new ArrayList<>();
+        for (Map.Entry<Long, List<TimeEntry>> entry : userGroupMap.entrySet()) {
+            Long userId = entry.getKey();
+            List<TimeEntry> userEntries = entry.getValue();
+            Float userHours = userEntries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+            
+            User user = userMapper.selectById(userId);
+            String userName = user != null ? user.getLogin() : "未知用户";
+            
+            userDetails.add(TimeEntryProjectReportDTO.UserTimeDetail.builder()
+                    .userId(userId)
+                    .userName(userName)
+                    .hours(round(userHours))
+                    .count((long) userEntries.size())
+                    .percentage(round((userHours / totalHours) * 100))
+                    .build());
+        }
+        userDetails.sort((a, b) -> Float.compare(b.getHours(), a.getHours()));
+        
+        // 6. 按活动类型分组统计
+        Map<Long, List<TimeEntry>> activityGroupMap = new HashMap<>();
+        for (TimeEntry entry : entries) {
+            activityGroupMap.computeIfAbsent(entry.getActivityId(), k -> new ArrayList<>()).add(entry);
+        }
+        
+        List<TimeEntryProjectReportDTO.ActivityTimeDetail> activityDetails = new ArrayList<>();
+        for (Map.Entry<Long, List<TimeEntry>> entry : activityGroupMap.entrySet()) {
+            Long activityId = entry.getKey();
+            List<TimeEntry> activityEntries = entry.getValue();
+            Float activityHours = activityEntries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+            
+            Enumeration activity = enumerationMapper.selectById(activityId);
+            String activityName = activity != null ? activity.getName() : "未知活动类型";
+            
+            activityDetails.add(TimeEntryProjectReportDTO.ActivityTimeDetail.builder()
+                    .activityId(activityId)
+                    .activityName(activityName)
+                    .hours(round(activityHours))
+                    .count((long) activityEntries.size())
+                    .percentage(round((activityHours / totalHours) * 100))
+                    .build());
+        }
+        activityDetails.sort((a, b) -> Float.compare(b.getHours(), a.getHours()));
+        
+        // 7. 构建项目信息
+        ProjectSimpleResponseDTO projectDTO = new ProjectSimpleResponseDTO();
+        projectDTO.setId(project.getId());
+        projectDTO.setName(project.getName());
+        projectDTO.setIdentifier(project.getIdentifier());
+        
+        log.info("项目工时报表生成完成: projectId={}, totalHours={}, userCount={}", 
+                request.getProjectId(), totalHours, userCount);
+        
+        return TimeEntryProjectReportDTO.builder()
+                .project(projectDTO)
+                .totalHours(round(totalHours))
+                .totalCount(totalCount)
+                .userCount(userCount)
+                .averageHours(round(averageHours))
+                .earliestDate(earliestDate)
+                .latestDate(latestDate)
+                .userDetails(userDetails)
+                .activityDetails(activityDetails)
+                .build();
+    }
+    
+    /**
+     * 生成用户工时报表
+     */
+    public TimeEntryUserReportDTO generateUserReport(TimeEntryReportRequestDTO request) {
+        MDC.put("method", "generateUserReport");
+        MDC.put("userId", String.valueOf(request.getUserId()));
+        
+        if (request.getUserId() == null) {
+            throw new BusinessException("用户ID不能为空");
+        }
+        
+        // 1. 获取用户信息
+        User user = userMapper.selectById(request.getUserId());
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        
+        // 2. 构建查询条件
+        LambdaQueryWrapper<TimeEntry> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(TimeEntry::getUserId, request.getUserId());
+        addDateRangeConditions(wrapper, request);
+        
+        // 3. 查询所有工时记录
+        List<TimeEntry> entries = timeEntryMapper.selectList(wrapper);
+        
+        if (entries.isEmpty()) {
+            return buildEmptyUserReport(user);
+        }
+        
+        // 4. 计算基础统计数据
+        Float totalHours = entries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+        Long totalCount = (long) entries.size();
+        Long projectCount = entries.stream().map(TimeEntry::getProjectId).distinct().count();
+        Float averageHours = totalHours / totalCount;
+        
+        String earliestDate = entries.stream()
+                .map(e -> e.getSpentOn().toString())
+                .min(String::compareTo)
+                .orElse("");
+        String latestDate = entries.stream()
+                .map(e -> e.getSpentOn().toString())
+                .max(String::compareTo)
+                .orElse("");
+        
+        // 5. 按项目分组统计
+        Map<Long, List<TimeEntry>> projectGroupMap = new HashMap<>();
+        for (TimeEntry entry : entries) {
+            projectGroupMap.computeIfAbsent(entry.getProjectId(), k -> new ArrayList<>()).add(entry);
+        }
+        
+        List<TimeEntryUserReportDTO.ProjectTimeDetail> projectDetails = new ArrayList<>();
+        for (Map.Entry<Long, List<TimeEntry>> entry : projectGroupMap.entrySet()) {
+            Long projectId = entry.getKey();
+            List<TimeEntry> projectEntries = entry.getValue();
+            Float projectHours = projectEntries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+            
+            Project project = projectMapper.selectById(projectId);
+            String projectName = project != null ? project.getName() : "未知项目";
+            
+            projectDetails.add(TimeEntryUserReportDTO.ProjectTimeDetail.builder()
+                    .projectId(projectId)
+                    .projectName(projectName)
+                    .hours(round(projectHours))
+                    .count((long) projectEntries.size())
+                    .percentage(round((projectHours / totalHours) * 100))
+                    .build());
+        }
+        projectDetails.sort((a, b) -> Float.compare(b.getHours(), a.getHours()));
+        
+        // 6. 按活动类型分组统计
+        Map<Long, List<TimeEntry>> activityGroupMap = new HashMap<>();
+        for (TimeEntry entry : entries) {
+            activityGroupMap.computeIfAbsent(entry.getActivityId(), k -> new ArrayList<>()).add(entry);
+        }
+        
+        List<TimeEntryUserReportDTO.ActivityTimeDetail> activityDetails = new ArrayList<>();
+        for (Map.Entry<Long, List<TimeEntry>> entry : activityGroupMap.entrySet()) {
+            Long activityId = entry.getKey();
+            List<TimeEntry> activityEntries = entry.getValue();
+            Float activityHours = activityEntries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+            
+            Enumeration activity = enumerationMapper.selectById(activityId);
+            String activityName = activity != null ? activity.getName() : "未知活动类型";
+            
+            activityDetails.add(TimeEntryUserReportDTO.ActivityTimeDetail.builder()
+                    .activityId(activityId)
+                    .activityName(activityName)
+                    .hours(round(activityHours))
+                    .count((long) activityEntries.size())
+                    .percentage(round((activityHours / totalHours) * 100))
+                    .build());
+        }
+        activityDetails.sort((a, b) -> Float.compare(b.getHours(), a.getHours()));
+        
+        // 7. 构建用户信息
+        UserSimpleResponseDTO userDTO = new UserSimpleResponseDTO();
+        userDTO.setId(user.getId());
+        userDTO.setLogin(user.getLogin());
+        userDTO.setFirstname(user.getFirstname());
+        userDTO.setLastname(user.getLastname());
+        
+        log.info("用户工时报表生成完成: userId={}, totalHours={}, projectCount={}", 
+                request.getUserId(), totalHours, projectCount);
+        
+        return TimeEntryUserReportDTO.builder()
+                .user(userDTO)
+                .totalHours(round(totalHours))
+                .totalCount(totalCount)
+                .projectCount(projectCount)
+                .averageHours(round(averageHours))
+                .earliestDate(earliestDate)
+                .latestDate(latestDate)
+                .projectDetails(projectDetails)
+                .activityDetails(activityDetails)
+                .build();
+    }
+    
+    /**
+     * 生成时间段工时报表
+     */
+    public TimeEntryPeriodReportDTO generatePeriodReport(TimeEntryReportRequestDTO request) {
+        MDC.put("method", "generatePeriodReport");
+        MDC.put("periodType", request.getPeriodType());
+        
+        // 1. 构建查询条件
+        LambdaQueryWrapper<TimeEntry> wrapper = new LambdaQueryWrapper<>();
+        if (request.getProjectId() != null) {
+            wrapper.eq(TimeEntry::getProjectId, request.getProjectId());
+        }
+        if (request.getUserId() != null) {
+            wrapper.eq(TimeEntry::getUserId, request.getUserId());
+        }
+        addDateRangeConditions(wrapper, request);
+        
+        // 2. 查询所有工时记录
+        List<TimeEntry> entries = timeEntryMapper.selectList(wrapper);
+        
+        if (entries.isEmpty()) {
+            return buildEmptyPeriodReport(request);
+        }
+        
+        // 3. 确定时间段类型
+        String periodType = request.getPeriodType();
+        if (periodType == null || periodType.isEmpty()) {
+            periodType = "day"; // 默认按日
+        }
+        
+        // 4. 计算基础统计数据
+        Float totalHours = entries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+        Long totalCount = (long) entries.size();
+        
+        String startDate = entries.stream()
+                .map(e -> e.getSpentOn().toString())
+                .min(String::compareTo)
+                .orElse("");
+        String endDate = entries.stream()
+                .map(e -> e.getSpentOn().toString())
+                .max(String::compareTo)
+                .orElse("");
+        
+        // 5. 按时间段分组统计
+        Map<String, List<TimeEntry>> periodGroupMap = new HashMap<>();
+        for (TimeEntry entry : entries) {
+            String period = getPeriodKey(entry.getSpentOn(), periodType);
+            periodGroupMap.computeIfAbsent(period, k -> new ArrayList<>()).add(entry);
+        }
+        
+        List<TimeEntryPeriodReportDTO.PeriodTimeDetail> periodDetails = new ArrayList<>();
+        for (Map.Entry<String, List<TimeEntry>> entry : periodGroupMap.entrySet()) {
+            String period = entry.getKey();
+            List<TimeEntry> periodEntries = entry.getValue();
+            Float periodHours = periodEntries.stream().map(TimeEntry::getHours).reduce(0f, Float::sum);
+            Long userCount = periodEntries.stream().map(TimeEntry::getUserId).distinct().count();
+            
+            periodDetails.add(TimeEntryPeriodReportDTO.PeriodTimeDetail.builder()
+                    .period(period)
+                    .periodName(getPeriodName(period, periodType))
+                    .hours(round(periodHours))
+                    .count((long) periodEntries.size())
+                    .userCount(userCount)
+                    .build());
+        }
+        periodDetails.sort((a, b) -> a.getPeriod().compareTo(b.getPeriod()));
+        
+        // 6. 计算每日平均工时
+        long dayCount = periodDetails.size();
+        Float averageDailyHours = dayCount > 0 ? totalHours / dayCount : 0f;
+        
+        Float maxDailyHours = periodDetails.stream()
+                .map(TimeEntryPeriodReportDTO.PeriodTimeDetail::getHours)
+                .max(Float::compare)
+                .orElse(0f);
+        
+        Float minDailyHours = periodDetails.stream()
+                .map(TimeEntryPeriodReportDTO.PeriodTimeDetail::getHours)
+                .min(Float::compare)
+                .orElse(0f);
+        
+        log.info("时间段工时报表生成完成: periodType={}, totalHours={}, periodCount={}", 
+                periodType, totalHours, periodDetails.size());
+        
+        return TimeEntryPeriodReportDTO.builder()
+                .periodType(periodType)
+                .startDate(startDate)
+                .endDate(endDate)
+                .totalHours(round(totalHours))
+                .totalCount(totalCount)
+                .averageDailyHours(round(averageDailyHours))
+                .maxDailyHours(round(maxDailyHours))
+                .minDailyHours(round(minDailyHours))
+                .periodDetails(periodDetails)
+                .build();
+    }
+    
+    /**
+     * 添加日期范围条件
+     */
+    private void addDateRangeConditions(LambdaQueryWrapper<TimeEntry> wrapper, TimeEntryReportRequestDTO request) {
+        if (request.getStartDate() != null) {
+            wrapper.ge(TimeEntry::getSpentOn, request.getStartDate());
+        }
+        if (request.getEndDate() != null) {
+            wrapper.le(TimeEntry::getSpentOn, request.getEndDate());
+        }
+        if (request.getYear() != null) {
+            wrapper.eq(TimeEntry::getTyear, request.getYear());
+        }
+        if (request.getMonth() != null) {
+            wrapper.eq(TimeEntry::getTmonth, request.getMonth());
+        }
+    }
+    
+    /**
+     * 获取时间段键
+     */
+    private String getPeriodKey(LocalDate date, String periodType) {
+        switch (periodType.toLowerCase()) {
+            case "week":
+                WeekFields weekFields = WeekFields.of(Locale.getDefault());
+                int weekNumber = date.get(weekFields.weekOfWeekBasedYear());
+                return String.format("%d-W%02d", date.getYear(), weekNumber);
+            case "month":
+                return String.format("%d-%02d", date.getYear(), date.getMonthValue());
+            case "day":
+            default:
+                return date.toString();
+        }
+    }
+    
+    /**
+     * 获取时间段名称
+     */
+    private String getPeriodName(String period, String periodType) {
+        switch (periodType.toLowerCase()) {
+            case "week":
+                return period.replace("-W", "年第") + "周";
+            case "month":
+                return period + "月";
+            case "day":
+            default:
+                return period;
+        }
+    }
+    
+    /**
+     * 构建空的项目报表
+     */
+    private TimeEntryProjectReportDTO buildEmptyProjectReport(Project project) {
+        ProjectSimpleResponseDTO projectDTO = new ProjectSimpleResponseDTO();
+        projectDTO.setId(project.getId());
+        projectDTO.setName(project.getName());
+        projectDTO.setIdentifier(project.getIdentifier());
+        
+        return TimeEntryProjectReportDTO.builder()
+                .project(projectDTO)
+                .totalHours(0f)
+                .totalCount(0L)
+                .userCount(0L)
+                .averageHours(0f)
+                .earliestDate("")
+                .latestDate("")
+                .userDetails(new ArrayList<>())
+                .activityDetails(new ArrayList<>())
+                .build();
+    }
+    
+    /**
+     * 构建空的用户报表
+     */
+    private TimeEntryUserReportDTO buildEmptyUserReport(User user) {
+        UserSimpleResponseDTO userDTO = new UserSimpleResponseDTO();
+        userDTO.setId(user.getId());
+        userDTO.setLogin(user.getLogin());
+        userDTO.setFirstname(user.getFirstname());
+        userDTO.setLastname(user.getLastname());
+        
+        return TimeEntryUserReportDTO.builder()
+                .user(userDTO)
+                .totalHours(0f)
+                .totalCount(0L)
+                .projectCount(0L)
+                .averageHours(0f)
+                .earliestDate("")
+                .latestDate("")
+                .projectDetails(new ArrayList<>())
+                .activityDetails(new ArrayList<>())
+                .build();
+    }
+    
+    /**
+     * 构建空的时间段报表
+     */
+    private TimeEntryPeriodReportDTO buildEmptyPeriodReport(TimeEntryReportRequestDTO request) {
+        String periodType = request.getPeriodType();
+        if (periodType == null || periodType.isEmpty()) {
+            periodType = "day";
+        }
+        
+        return TimeEntryPeriodReportDTO.builder()
+                .periodType(periodType)
+                .startDate("")
+                .endDate("")
+                .totalHours(0f)
+                .totalCount(0L)
+                .averageDailyHours(0f)
+                .maxDailyHours(0f)
+                .minDailyHours(0f)
+                .periodDetails(new ArrayList<>())
+                .build();
+    }
+    
+    /**
+     * 四舍五入保留2位小数
+     */
+    private Float round(Float value) {
+        return Math.round(value * 100) / 100f;
     }
 }
