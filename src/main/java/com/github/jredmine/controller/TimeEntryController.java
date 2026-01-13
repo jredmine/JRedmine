@@ -4,11 +4,15 @@ import com.github.jredmine.dto.request.timeentry.*;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.timeentry.*;
+import com.github.jredmine.service.TimeEntryExportService;
 import com.github.jredmine.service.TimeEntryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,6 +29,7 @@ import org.springframework.web.bind.annotation.*;
 public class TimeEntryController {
     
     private final TimeEntryService timeEntryService;
+    private final TimeEntryExportService exportService;
     
     /**
      * 查询工时记录列表
@@ -136,5 +141,169 @@ public class TimeEntryController {
     public ApiResponse<TimeEntryPeriodReportDTO> generatePeriodReport(TimeEntryReportRequestDTO request) {
         TimeEntryPeriodReportDTO result = timeEntryService.generatePeriodReport(request);
         return ApiResponse.success("时间段工时报表生成成功", result);
+    }
+    
+    // ==================== 导出功能 ====================
+    
+    /**
+     * 导出项目工时报表为Excel
+     */
+    @Operation(summary = "导出项目工时报表(Excel)", description = "将项目工时报表导出为Excel文件")
+    @GetMapping("/reports/project/export/excel")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportProjectReportToExcel(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportProjectReportToExcel(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "project_time_report.xlsx");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出项目工时报表为CSV
+     */
+    @Operation(summary = "导出项目工时报表(CSV)", description = "将项目工时报表导出为CSV文件")
+    @GetMapping("/reports/project/export/csv")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportProjectReportToCSV(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportProjectReportToCSV(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv"));
+        headers.setContentDispositionFormData("attachment", "project_time_report.csv");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出项目工时报表为PDF
+     */
+    @Operation(summary = "导出项目工时报表(PDF)", description = "将项目工时报表导出为PDF文件")
+    @GetMapping("/reports/project/export/pdf")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportProjectReportToPDF(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportProjectReportToPDF(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.setContentDispositionFormData("attachment", "project_time_report.pdf");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出用户工时报表为Excel
+     */
+    @Operation(summary = "导出用户工时报表(Excel)", description = "将用户工时报表导出为Excel文件")
+    @GetMapping("/reports/user/export/excel")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportUserReportToExcel(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportUserReportToExcel(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "user_time_report.xlsx");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出用户工时报表为CSV
+     */
+    @Operation(summary = "导出用户工时报表(CSV)", description = "将用户工时报表导出为CSV文件")
+    @GetMapping("/reports/user/export/csv")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportUserReportToCSV(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportUserReportToCSV(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv"));
+        headers.setContentDispositionFormData("attachment", "user_time_report.csv");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出用户工时报表为PDF
+     */
+    @Operation(summary = "导出用户工时报表(PDF)", description = "将用户工时报表导出为PDF文件")
+    @GetMapping("/reports/user/export/pdf")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportUserReportToPDF(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportUserReportToPDF(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.setContentDispositionFormData("attachment", "user_time_report.pdf");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出时间段工时报表为Excel
+     */
+    @Operation(summary = "导出时间段工时报表(Excel)", description = "将时间段工时报表导出为Excel文件")
+    @GetMapping("/reports/period/export/excel")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportPeriodReportToExcel(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportPeriodReportToExcel(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "period_time_report.xlsx");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出时间段工时报表为CSV
+     */
+    @Operation(summary = "导出时间段工时报表(CSV)", description = "将时间段工时报表导出为CSV文件")
+    @GetMapping("/reports/period/export/csv")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportPeriodReportToCSV(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportPeriodReportToCSV(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv"));
+        headers.setContentDispositionFormData("attachment", "period_time_report.csv");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+    
+    /**
+     * 导出时间段工时报表为PDF
+     */
+    @Operation(summary = "导出时间段工时报表(PDF)", description = "将时间段工时报表导出为PDF文件")
+    @GetMapping("/reports/period/export/pdf")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    public ResponseEntity<byte[]> exportPeriodReportToPDF(TimeEntryReportRequestDTO request) {
+        byte[] data = exportService.exportPeriodReportToPDF(request);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.setContentDispositionFormData("attachment", "period_time_report.pdf");
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
     }
 }
