@@ -5,6 +5,7 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.timeentry.*;
 import com.github.jredmine.service.TimeEntryExportService;
+import com.github.jredmine.service.TimeEntryImportService;
 import com.github.jredmine.service.TimeEntryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -15,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * 工时记录控制器
@@ -27,10 +29,11 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/time-entries")
 @RequiredArgsConstructor
 public class TimeEntryController {
-    
+
     private final TimeEntryService timeEntryService;
     private final TimeEntryExportService exportService;
-    
+    private final TimeEntryImportService importService;
+
     /**
      * 查询工时记录列表
      */
@@ -41,7 +44,7 @@ public class TimeEntryController {
         PageResponse<TimeEntryResponseDTO> result = timeEntryService.queryTimeEntries(request);
         return ApiResponse.success(result);
     }
-    
+
     /**
      * 创建工时记录
      */
@@ -52,7 +55,7 @@ public class TimeEntryController {
         TimeEntryResponseDTO result = timeEntryService.createTimeEntry(request);
         return ApiResponse.success("工时记录创建成功", result);
     }
-    
+
     /**
      * 根据ID获取工时记录
      */
@@ -63,7 +66,7 @@ public class TimeEntryController {
         TimeEntryResponseDTO result = timeEntryService.getTimeEntryById(id);
         return ApiResponse.success(result);
     }
-    
+
     /**
      * 更新工时记录
      */
@@ -76,7 +79,7 @@ public class TimeEntryController {
         TimeEntryResponseDTO result = timeEntryService.updateTimeEntry(id, request);
         return ApiResponse.success("工时记录更新成功", result);
     }
-    
+
     /**
      * 删除工时记录
      */
@@ -87,7 +90,7 @@ public class TimeEntryController {
         timeEntryService.deleteTimeEntry(id);
         return ApiResponse.success("工时记录删除成功", null);
     }
-    
+
     /**
      * 获取工时汇总统计
      */
@@ -98,7 +101,7 @@ public class TimeEntryController {
         TimeEntrySummaryResponseDTO result = timeEntryService.getTimeEntrySummary(request);
         return ApiResponse.success("工时汇总统计获取成功", result);
     }
-    
+
     /**
      * 获取工时分组统计
      */
@@ -109,7 +112,7 @@ public class TimeEntryController {
         TimeEntryStatisticsResponseDTO result = timeEntryService.getTimeEntryStatistics(request);
         return ApiResponse.success("工时分组统计获取成功", result);
     }
-    
+
     /**
      * 生成项目工时报表
      */
@@ -120,7 +123,7 @@ public class TimeEntryController {
         TimeEntryProjectReportDTO result = timeEntryService.generateProjectReport(request);
         return ApiResponse.success("项目工时报表生成成功", result);
     }
-    
+
     /**
      * 生成用户工时报表
      */
@@ -131,7 +134,7 @@ public class TimeEntryController {
         TimeEntryUserReportDTO result = timeEntryService.generateUserReport(request);
         return ApiResponse.success("用户工时报表生成成功", result);
     }
-    
+
     /**
      * 生成时间段工时报表
      */
@@ -142,9 +145,9 @@ public class TimeEntryController {
         TimeEntryPeriodReportDTO result = timeEntryService.generatePeriodReport(request);
         return ApiResponse.success("时间段工时报表生成成功", result);
     }
-    
+
     // ==================== 导出功能 ====================
-    
+
     /**
      * 导出项目工时报表为Excel
      */
@@ -153,16 +156,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportProjectReportToExcel(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportProjectReportToExcel(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         headers.setContentDispositionFormData("attachment", "project_time_report.xlsx");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出项目工时报表为CSV
      */
@@ -171,16 +174,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportProjectReportToCSV(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportProjectReportToCSV(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("text/csv"));
         headers.setContentDispositionFormData("attachment", "project_time_report.csv");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出项目工时报表为PDF
      */
@@ -189,16 +192,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportProjectReportToPDF(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportProjectReportToPDF(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_PDF);
         headers.setContentDispositionFormData("attachment", "project_time_report.pdf");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出用户工时报表为Excel
      */
@@ -207,16 +210,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportUserReportToExcel(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportUserReportToExcel(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         headers.setContentDispositionFormData("attachment", "user_time_report.xlsx");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出用户工时报表为CSV
      */
@@ -225,16 +228,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportUserReportToCSV(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportUserReportToCSV(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("text/csv"));
         headers.setContentDispositionFormData("attachment", "user_time_report.csv");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出用户工时报表为PDF
      */
@@ -243,16 +246,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportUserReportToPDF(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportUserReportToPDF(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_PDF);
         headers.setContentDispositionFormData("attachment", "user_time_report.pdf");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出时间段工时报表为Excel
      */
@@ -261,16 +264,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportPeriodReportToExcel(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportPeriodReportToExcel(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         headers.setContentDispositionFormData("attachment", "period_time_report.xlsx");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出时间段工时报表为CSV
      */
@@ -279,16 +282,16 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportPeriodReportToCSV(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportPeriodReportToCSV(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.parseMediaType("text/csv"));
         headers.setContentDispositionFormData("attachment", "period_time_report.csv");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
     }
-    
+
     /**
      * 导出时间段工时报表为PDF
      */
@@ -297,13 +300,89 @@ public class TimeEntryController {
     @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
     public ResponseEntity<byte[]> exportPeriodReportToPDF(TimeEntryReportRequestDTO request) {
         byte[] data = exportService.exportPeriodReportToPDF(request);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_PDF);
         headers.setContentDispositionFormData("attachment", "period_time_report.pdf");
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(data);
+    }
+
+    // ==================== 批量导入功能 ====================
+
+    /**
+     * 下载Excel导入模板
+     */
+    @Operation(summary = "下载Excel导入模板", description = "下载工时记录批量导入的Excel模板文件")
+    @GetMapping("/import/template/excel")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('log_time')")
+    public ResponseEntity<byte[]> downloadExcelTemplate() {
+        byte[] data = importService.generateExcelTemplate();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "time_entry_import_template.xlsx");
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+
+    /**
+     * 下载CSV导入模板
+     */
+    @Operation(summary = "下载CSV导入模板", description = "下载工时记录批量导入的CSV模板文件")
+    @GetMapping("/import/template/csv")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('log_time')")
+    public ResponseEntity<byte[]> downloadCSVTemplate() {
+        byte[] data = importService.generateCSVTemplate();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv"));
+        headers.setContentDispositionFormData("attachment", "time_entry_import_template.csv");
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(data);
+    }
+
+    /**
+     * 从Excel文件批量导入工时记录
+     */
+    @Operation(summary = "批量导入工时记录(Excel)", description = "从Excel文件批量导入工时记录")
+    @PostMapping(value = "/import/excel", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('log_time')")
+    public ApiResponse<TimeEntryBatchImportResponseDTO> importFromExcel(
+            @RequestParam("file") MultipartFile file) {
+        TimeEntryBatchImportResponseDTO result = importService.importFromExcel(file);
+
+        if (result.getFailureCount() == 0) {
+            return ApiResponse.success("批量导入成功", result);
+        } else if (result.getSuccessCount() == 0) {
+            return ApiResponse.error(400, "批量导入失败，所有记录均未成功", result);
+        } else {
+            return ApiResponse.success("批量导入部分成功", result);
+        }
+    }
+
+    /**
+     * 从CSV文件批量导入工时记录
+     */
+    @Operation(summary = "批量导入工时记录(CSV)", description = "从CSV文件批量导入工时记录")
+    @PostMapping(value = "/import/csv", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('log_time')")
+    public ApiResponse<TimeEntryBatchImportResponseDTO> importFromCSV(
+            @RequestParam("file") MultipartFile file) {
+        TimeEntryBatchImportResponseDTO result = importService.importFromCSV(file);
+
+        if (result.getFailureCount() == 0) {
+            return ApiResponse.success("批量导入成功", result);
+        } else if (result.getSuccessCount() == 0) {
+            return ApiResponse.error(400, "批量导入失败，所有记录均未成功", result);
+        } else {
+            return ApiResponse.success("批量导入部分成功", result);
+        }
     }
 }
