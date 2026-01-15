@@ -3,6 +3,7 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.jredmine.dto.request.timeentry.TimeEntryBatchDeleteRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryReportRequestDTO;
@@ -338,6 +339,68 @@ public class TimeEntryService {
         
         log.info("删除工时记录成功: id={}, projectId={}, userId={}, hours={}", 
                 id, timeEntry.getProjectId(), timeEntry.getUserId(), timeEntry.getHours());
+    }
+    
+    /**
+     * 批量删除工时记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public TimeEntryBatchDeleteResponseDTO batchDeleteTimeEntries(TimeEntryBatchDeleteRequestDTO request) {
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAdmin = securityUtils.isAdmin();
+        MDC.put("userId", String.valueOf(currentUserId));
+        
+        List<Long> ids = request.getIds();
+        int successCount = 0;
+        List<TimeEntryBatchDeleteResponseDTO.FailureDetail> failures = new ArrayList<>();
+        
+        log.info("开始批量删除工时记录，数量: {}, 用户: {}", ids.size(), currentUserId);
+        
+        for (Long id : ids) {
+            try {
+                // 1. 验证工时记录是否存在
+                TimeEntry timeEntry = timeEntryMapper.selectById(id);
+                if (timeEntry == null) {
+                    failures.add(TimeEntryBatchDeleteResponseDTO.FailureDetail.builder()
+                            .timeEntryId(id)
+                            .reason("工时记录不存在")
+                            .build());
+                    continue;
+                }
+                
+                // 2. 权限检查：只能删除自己创建的记录，或者是管理员
+                if (!isAdmin && !timeEntry.getAuthorId().equals(currentUserId)) {
+                    failures.add(TimeEntryBatchDeleteResponseDTO.FailureDetail.builder()
+                            .timeEntryId(id)
+                            .reason("无权限删除此工时记录")
+                            .build());
+                    continue;
+                }
+                
+                // 3. 删除工时记录
+                timeEntryMapper.deleteById(id);
+                successCount++;
+                
+                log.debug("删除工时记录成功: id={}", id);
+                
+            } catch (Exception e) {
+                log.warn("删除工时记录失败: id={}, 原因: {}", id, e.getMessage());
+                failures.add(TimeEntryBatchDeleteResponseDTO.FailureDetail.builder()
+                        .timeEntryId(id)
+                        .reason(e.getMessage())
+                        .build());
+            }
+        }
+        
+        log.info("批量删除工时记录完成: 总数={}, 成功={}, 失败={}", 
+                ids.size(), successCount, failures.size());
+        
+        return TimeEntryBatchDeleteResponseDTO.builder()
+                .totalCount(ids.size())
+                .successCount(successCount)
+                .failureCount(failures.size())
+                .failures(failures)
+                .build();
     }
     
     /**
