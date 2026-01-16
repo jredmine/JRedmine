@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.timeentry.*;
 import com.github.jredmine.dto.response.timeentry.TimeEntryBatchDeleteResponseDTO;
+import com.github.jredmine.dto.response.timeentry.TimeEntryBatchUpdateResponseDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.timeentry.*;
@@ -108,6 +109,25 @@ public class TimeEntryController {
             return ApiResponse.error(400, "批量删除失败，所有记录均未成功删除", result);
         } else {
             return ApiResponse.success("批量删除部分成功", result);
+        }
+    }
+
+    /**
+     * 批量更新工时记录
+     */
+    @Operation(summary = "批量更新工时记录", description = "批量更新多条工时记录。只能更新自己创建的工时记录，或者需要管理员权限。")
+    @PutMapping("/batch")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('edit_time_entries')")
+    public ApiResponse<TimeEntryBatchUpdateResponseDTO> batchUpdateTimeEntries(
+            @Valid @RequestBody TimeEntryBatchUpdateRequestDTO request) {
+        TimeEntryBatchUpdateResponseDTO result = timeEntryService.batchUpdateTimeEntries(request);
+
+        if (result.getFailureCount() == 0) {
+            return ApiResponse.success("批量更新成功", result);
+        } else if (result.getSuccessCount() == 0) {
+            return ApiResponse.error(400, "批量更新失败，所有记录均未成功更新", result);
+        } else {
+            return ApiResponse.success("批量更新部分成功", result);
         }
     }
 

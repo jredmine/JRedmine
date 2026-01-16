@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.timeentry.TimeEntryBatchDeleteRequestDTO;
+import com.github.jredmine.dto.request.timeentry.TimeEntryBatchUpdateRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryQueryRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryReportRequestDTO;
@@ -13,6 +14,7 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectSimpleResponseDTO;
 import com.github.jredmine.dto.response.timeentry.*;
 import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
+import com.github.jredmine.dto.response.timeentry.TimeEntryBatchUpdateResponseDTO;
 import com.github.jredmine.entity.*;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.TimeEntryMapper;
@@ -400,6 +402,146 @@ public class TimeEntryService {
                 .successCount(successCount)
                 .failureCount(failures.size())
                 .failures(failures)
+                .build();
+    }
+    
+    /**
+     * 批量更新工时记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public TimeEntryBatchUpdateResponseDTO batchUpdateTimeEntries(TimeEntryBatchUpdateRequestDTO request) {
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAdmin = securityUtils.isAdmin();
+        MDC.put("userId", String.valueOf(currentUserId));
+        
+        List<TimeEntryBatchUpdateRequestDTO.TimeEntryUpdateItem> items = request.getItems();
+        int successCount = 0;
+        List<TimeEntryBatchUpdateResponseDTO.FailureDetail> failures = new ArrayList<>();
+        List<TimeEntryResponseDTO> successRecords = new ArrayList<>();
+        
+        log.info("开始批量更新工时记录，数量: {}, 用户: {}", items.size(), currentUserId);
+        
+        for (TimeEntryBatchUpdateRequestDTO.TimeEntryUpdateItem item : items) {
+            try {
+                // 1. 验证工时记录是否存在
+                TimeEntry timeEntry = timeEntryMapper.selectById(item.getId());
+                if (timeEntry == null) {
+                    failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                            .timeEntryId(item.getId())
+                            .reason("工时记录不存在")
+                            .build());
+                    continue;
+                }
+                
+                // 2. 权限检查：只能更新自己创建的记录，或者是管理员
+                if (!isAdmin && !timeEntry.getAuthorId().equals(currentUserId)) {
+                    failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                            .timeEntryId(item.getId())
+                            .reason("无权限更新此工时记录")
+                            .build());
+                    continue;
+                }
+                
+                // 3. 更新任务ID
+                if (item.getIssueId() != null) {
+                    if (item.getIssueId() > 0) {
+                        Issue issue = issueMapper.selectById(item.getIssueId());
+                        if (issue == null) {
+                            failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                                    .timeEntryId(item.getId())
+                                    .reason("任务不存在")
+                                    .build());
+                            continue;
+                        }
+                        // 验证任务是否属于同一项目
+                        if (!issue.getProjectId().equals(timeEntry.getProjectId())) {
+                            failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                                    .timeEntryId(item.getId())
+                                    .reason("任务不属于该项目")
+                                    .build());
+                            continue;
+                        }
+                    }
+                    timeEntry.setIssueId(item.getIssueId());
+                }
+                
+                // 4. 更新工作人员ID
+                if (item.getUserId() != null) {
+                    User user = userMapper.selectById(item.getUserId());
+                    if (user == null) {
+                        failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                                .timeEntryId(item.getId())
+                                .reason("工作人员不存在")
+                                .build());
+                        continue;
+                    }
+                    timeEntry.setUserId(item.getUserId());
+                }
+                
+                // 5. 更新活动类型
+                if (item.getActivityId() != null) {
+                    com.github.jredmine.entity.Enumeration activity = enumerationMapper.selectById(item.getActivityId());
+                    if (activity == null || !"TimeEntryActivity".equals(activity.getType())) {
+                        failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                                .timeEntryId(item.getId())
+                                .reason("活动类型不存在或类型不正确")
+                                .build());
+                        continue;
+                    }
+                    timeEntry.setActivityId(item.getActivityId());
+                }
+                
+                // 6. 更新工时
+                if (item.getHours() != null) {
+                    timeEntry.setHours(item.getHours());
+                }
+                
+                // 7. 更新工作日期，需要重新计算年月周
+                if (item.getSpentOn() != null) {
+                    LocalDate spentOn = item.getSpentOn();
+                    timeEntry.setSpentOn(spentOn);
+                    timeEntry.setTyear(spentOn.getYear());
+                    timeEntry.setTmonth(spentOn.getMonthValue());
+                    WeekFields weekFields = WeekFields.of(Locale.getDefault());
+                    timeEntry.setTweek(spentOn.get(weekFields.weekOfWeekBasedYear()));
+                }
+                
+                // 8. 更新备注
+                if (item.getComments() != null) {
+                    timeEntry.setComments(item.getComments());
+                }
+                
+                // 9. 更新时间戳
+                timeEntry.setUpdatedOn(LocalDateTime.now());
+                
+                // 10. 保存到数据库
+                timeEntryMapper.updateById(timeEntry);
+                successCount++;
+                
+                // 11. 添加到成功记录列表
+                TimeEntryResponseDTO responseDTO = convertToResponseDTO(timeEntry);
+                successRecords.add(responseDTO);
+                
+                log.debug("更新工时记录成功: id={}", item.getId());
+                
+            } catch (Exception e) {
+                log.warn("更新工时记录失败: id={}, 原因: {}", item.getId(), e.getMessage());
+                failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
+                        .timeEntryId(item.getId())
+                        .reason(e.getMessage())
+                        .build());
+            }
+        }
+        
+        log.info("批量更新工时记录完成: 总数={}, 成功={}, 失败={}", 
+                items.size(), successCount, failures.size());
+        
+        return TimeEntryBatchUpdateResponseDTO.builder()
+                .totalCount(items.size())
+                .successCount(successCount)
+                .failureCount(failures.size())
+                .failures(failures)
+                .successRecords(successRecords)
                 .build();
     }
     
