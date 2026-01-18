@@ -5,6 +5,7 @@ import com.github.jredmine.dto.request.attachment.AttachmentUpdateRequestDTO;
 import com.github.jredmine.dto.request.attachment.AttachmentUploadRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.attachment.AttachmentBatchUploadResponseDTO;
 import com.github.jredmine.dto.response.attachment.AttachmentResponseDTO;
 import com.github.jredmine.service.AttachmentService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.util.List;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -60,6 +62,34 @@ public class AttachmentController {
 
         AttachmentResponseDTO result = attachmentService.uploadAttachment(file, request);
         return ApiResponse.success("附件上传成功", result);
+    }
+    
+    /**
+     * 批量上传附件
+     */
+    @Operation(summary = "批量上传附件", description = "批量上传多个文件并创建附件记录，所有文件共享相同的容器类型、容器ID和描述")
+    @PostMapping(value = "/batch", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("isAuthenticated()")
+    public ApiResponse<AttachmentBatchUploadResponseDTO> batchUploadAttachments(
+            @Parameter(description = "上传的文件列表", required = true)
+            @RequestParam("files") List<MultipartFile> files,
+            @Parameter(description = "容器类型（如：Issue、Project、Document、WikiPage等）")
+            @RequestParam(value = "containerType", required = false) String containerType,
+            @Parameter(description = "容器ID")
+            @RequestParam(value = "containerId", required = false) Long containerId,
+            @Parameter(description = "文件描述")
+            @RequestParam(value = "description", required = false) String description) {
+        
+        AttachmentBatchUploadResponseDTO result = attachmentService.batchUploadAttachments(
+                files, containerType, containerId, description);
+        
+        if (result.getFailureCount() == 0) {
+            return ApiResponse.success("批量上传成功", result);
+        } else if (result.getSuccessCount() == 0) {
+            return ApiResponse.error(400, "批量上传失败，所有文件均未成功上传", result);
+        } else {
+            return ApiResponse.success("批量上传部分成功", result);
+        }
     }
 
     /**

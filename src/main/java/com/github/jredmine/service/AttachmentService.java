@@ -7,6 +7,7 @@ import com.github.jredmine.dto.request.attachment.AttachmentQueryRequestDTO;
 import com.github.jredmine.dto.request.attachment.AttachmentUpdateRequestDTO;
 import com.github.jredmine.dto.request.attachment.AttachmentUploadRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.attachment.AttachmentBatchUploadResponseDTO;
 import com.github.jredmine.dto.response.attachment.AttachmentResponseDTO;
 import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
 import com.github.jredmine.entity.Attachment;
@@ -32,6 +33,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -129,6 +131,59 @@ public class AttachmentService {
                 attachment.getId(), originalFilename, file.getSize());
 
         return convertToResponseDTO(attachment);
+    }
+    
+    /**
+     * 批量上传附件
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public AttachmentBatchUploadResponseDTO batchUploadAttachments(
+            List<MultipartFile> files, 
+            String containerType, 
+            Long containerId, 
+            String description) {
+        
+        List<AttachmentResponseDTO> successes = new ArrayList<>();
+        List<AttachmentBatchUploadResponseDTO.FailureDetail> failures = new ArrayList<>();
+        
+        for (MultipartFile file : files) {
+            try {
+                // 构建请求DTO
+                AttachmentUploadRequestDTO request = new AttachmentUploadRequestDTO();
+                request.setContainerType(containerType);
+                request.setContainerId(containerId);
+                request.setDescription(description);
+                
+                // 上传单个文件
+                AttachmentResponseDTO attachment = uploadAttachment(file, request);
+                successes.add(attachment);
+                
+            } catch (Exception e) {
+                log.error("批量上传文件失败: filename={}, error={}", 
+                        file.getOriginalFilename(), e.getMessage(), e);
+                
+                AttachmentBatchUploadResponseDTO.FailureDetail failure = 
+                        AttachmentBatchUploadResponseDTO.FailureDetail.builder()
+                                .filename(file.getOriginalFilename())
+                                .reason(e.getMessage())
+                                .build();
+                failures.add(failure);
+            }
+        }
+        
+        int totalCount = files.size();
+        int successCount = successes.size();
+        int failureCount = failures.size();
+        
+        log.info("批量上传附件完成: 总数={}, 成功={}, 失败={}", totalCount, successCount, failureCount);
+        
+        return AttachmentBatchUploadResponseDTO.builder()
+                .totalCount(totalCount)
+                .successCount(successCount)
+                .failureCount(failureCount)
+                .successes(successes)
+                .failures(failures)
+                .build();
     }
 
     /**
