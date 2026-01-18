@@ -39,7 +39,7 @@ import java.nio.charset.StandardCharsets;
 @RequestMapping("/api/attachments")
 @RequiredArgsConstructor
 public class AttachmentController {
-
+    
     private final AttachmentService attachmentService;
 
     /**
@@ -175,6 +175,41 @@ public class AttachmentController {
                 attachment.getContentType() != null ? attachment.getContentType()
                         : MediaType.APPLICATION_OCTET_STREAM_VALUE));
 
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(resource);
+    }
+    
+    /**
+     * 批量下载附件（打包为ZIP）
+     */
+    @Operation(summary = "批量下载附件", description = "批量下载多个附件并打包为ZIP文件")
+    @PostMapping("/batch/download")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<Resource> batchDownloadAttachments(
+            @Parameter(description = "附件ID列表", required = true)
+            @RequestBody List<Long> attachmentIds) {
+        
+        // 打包为ZIP
+        File zipFile = attachmentService.batchDownloadAttachments(attachmentIds);
+        Resource resource = new FileSystemResource(zipFile);
+        
+        // 处理文件名编码
+        String filename = zipFile.getName();
+        String encodedFilename;
+        try {
+            encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8.toString())
+                    .replaceAll("\\+", "%20");
+        } catch (UnsupportedEncodingException e) {
+            encodedFilename = filename;
+        }
+        
+        // 设置响应头
+        HttpHeaders headers = new HttpHeaders();
+        headers.add(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename*=UTF-8''" + encodedFilename);
+        headers.setContentType(MediaType.parseMediaType("application/zip"));
+        
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(resource);

@@ -25,16 +25,23 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -324,6 +331,135 @@ public class AttachmentService {
         }
 
         return file;
+    }
+    
+    /**
+     * 批量下载附件（打包为ZIP）
+     */
+    public File batchDownloadAttachments(List<Long> attachmentIds) {
+        if (attachmentIds == null || attachmentIds.isEmpty()) {
+            throw new BusinessException("附件ID列表不能为空");
+        }
+        
+        // 查询所有附件
+        List<Attachment> attachments = new ArrayList<>();
+        for (Long id : attachmentIds) {
+            Attachment attachment = attachmentMapper.selectById(id);
+            if (attachment != null) {
+                attachments.add(attachment);
+            }
+        }
+        
+        if (attachments.isEmpty()) {
+            throw new BusinessException("未找到任何附件");
+        }
+        
+        // 创建临时ZIP文件（使用系统临时目录）
+        Path tempDir = Paths.get(System.getProperty("java.io.tmpdir"));
+        // 确保临时目录存在
+        try {
+            Files.createDirectories(tempDir);
+        } catch (IOException e) {
+            log.error("创建临时目录失败: {}", tempDir, e);
+            throw new BusinessException("创建临时目录失败: " + e.getMessage());
+        }
+        
+        String zipFilename = "attachments_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8) + ".zip";
+        Path zipPath = tempDir.resolve(zipFilename);
+        
+        int successCount = 0;
+        try {
+            // 创建ZIP输出流
+            try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipPath.toFile()))) {
+                byte[] buffer = new byte[8192];
+                Path baseStoragePath = getStoragePath();
+                
+                // 用于处理同名文件
+                Set<String> usedNames = new HashSet<>();
+                
+                for (Attachment attachment : attachments) {
+                    try {
+                        Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                                .resolve(attachment.getDiskFilename());
+                        File file = filePath.toFile();
+                        
+                        if (!file.exists()) {
+                            log.warn("文件不存在，跳过: attachmentId={}, path={}", attachment.getId(), filePath);
+                            continue;
+                        }
+                        
+                        // 处理同名文件：如果ZIP内已有同名文件，添加序号
+                        String entryName = attachment.getFilename();
+                        if (entryName == null || entryName.isEmpty()) {
+                            entryName = "unnamed_" + attachment.getId();
+                        }
+                        
+                        int counter = 1;
+                        String originalEntryName = entryName;
+                        while (usedNames.contains(entryName)) {
+                            int lastDot = originalEntryName.lastIndexOf('.');
+                            if (lastDot > 0) {
+                                String nameWithoutExt = originalEntryName.substring(0, lastDot);
+                                String ext = originalEntryName.substring(lastDot);
+                                entryName = nameWithoutExt + "_" + counter + ext;
+                            } else {
+                                entryName = originalEntryName + "_" + counter;
+                            }
+                            counter++;
+                        }
+                        usedNames.add(entryName);
+                        
+                        // 创建ZIP条目（使用处理后的文件名）
+                        ZipEntry entry = new ZipEntry(entryName);
+                        zos.putNextEntry(entry);
+                        
+                        // 写入文件内容
+                        try (InputStream is = new FileInputStream(file)) {
+                            int len;
+                            while ((len = is.read(buffer)) > 0) {
+                                zos.write(buffer, 0, len);
+                            }
+                        }
+                        
+                        zos.closeEntry();
+                        successCount++;
+                        
+                        // 增加下载次数
+                        attachment.setDownloads(attachment.getDownloads() + 1);
+                        attachmentMapper.updateById(attachment);
+                        
+                    } catch (Exception e) {
+                        log.error("处理附件失败: attachmentId={}, error={}", attachment.getId(), e.getMessage(), e);
+                        // 继续处理下一个文件
+                    }
+                }
+            }
+            
+            if (successCount == 0) {
+                // 清理临时文件
+                try {
+                    Files.deleteIfExists(zipPath);
+                } catch (IOException ex) {
+                    log.error("清理临时文件失败: {}", ex.getMessage());
+                }
+                throw new BusinessException("没有成功打包任何文件");
+            }
+            
+            log.info("批量下载附件打包完成: zipPath={}, 总文件数={}, 成功数={}", zipPath, attachments.size(), successCount);
+            return zipPath.toFile();
+            
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("批量下载附件打包失败: {}", e.getMessage(), e);
+            // 清理临时文件
+            try {
+                Files.deleteIfExists(zipPath);
+            } catch (IOException ex) {
+                log.error("清理临时文件失败: {}", ex.getMessage());
+            }
+            throw new BusinessException("批量下载打包失败: " + e.getMessage());
+        }
     }
 
     /**
