@@ -5,3 +5,8 @@ spring:
     name: JRedmine
   profiles:
     active: local # 默认启用本地环境（可以在启动时覆盖）
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB      # 单个文件最大大小
+      max-request-size: 50MB   # 整个请求最大大小
