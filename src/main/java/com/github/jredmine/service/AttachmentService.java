@@ -66,7 +66,7 @@ public class AttachmentService {
 
     @Value("${attachment.storage.path:files}")
     private String storagePath;
-    
+
     /**
      * 获取存储路径的绝对路径
      */
@@ -75,7 +75,7 @@ public class AttachmentService {
         // 如果是相对路径，则基于用户目录或项目目录
         if (!path.isAbsolute()) {
             // 优先使用系统属性指定的路径
-            String basePath = System.getProperty("attachment.storage.base", 
+            String basePath = System.getProperty("attachment.storage.base",
                     System.getProperty("user.home", "."));
             path = Paths.get(basePath, storagePath);
         }
@@ -87,13 +87,13 @@ public class AttachmentService {
 
     @Value("${attachment.allowed-extensions:}")
     private String allowedExtensions;
-    
+
     @Value("${attachment.thumbnail.enabled:true}")
     private Boolean thumbnailEnabled;
-    
+
     @Value("${attachment.thumbnail.width:200}")
     private Integer thumbnailWidth;
-    
+
     @Value("${attachment.thumbnail.height:200}")
     private Integer thumbnailHeight;
 
@@ -125,7 +125,7 @@ public class AttachmentService {
             // 写入文件
             file.transferTo(filePath.toFile());
             log.debug("文件保存成功: {}", filePath.toAbsolutePath());
-            
+
             // 5. 如果是图片文件，生成缩略图
             if (thumbnailEnabled && isImageFile(file.getContentType(), originalFilename)) {
                 try {
@@ -162,20 +162,20 @@ public class AttachmentService {
 
         return convertToResponseDTO(attachment);
     }
-    
+
     /**
      * 批量上传附件
      */
     @Transactional(rollbackFor = Exception.class)
     public AttachmentBatchUploadResponseDTO batchUploadAttachments(
-            List<MultipartFile> files, 
-            String containerType, 
-            Long containerId, 
+            List<MultipartFile> files,
+            String containerType,
+            Long containerId,
             String description) {
-        
+
         List<AttachmentResponseDTO> successes = new ArrayList<>();
         List<AttachmentBatchUploadResponseDTO.FailureDetail> failures = new ArrayList<>();
-        
+
         for (MultipartFile file : files) {
             try {
                 // 构建请求DTO
@@ -183,30 +183,30 @@ public class AttachmentService {
                 request.setContainerType(containerType);
                 request.setContainerId(containerId);
                 request.setDescription(description);
-                
+
                 // 上传单个文件
                 AttachmentResponseDTO attachment = uploadAttachment(file, request);
                 successes.add(attachment);
-                
+
             } catch (Exception e) {
-                log.error("批量上传文件失败: filename={}, error={}", 
+                log.error("批量上传文件失败: filename={}, error={}",
                         file.getOriginalFilename(), e.getMessage(), e);
-                
-                AttachmentBatchUploadResponseDTO.FailureDetail failure = 
-                        AttachmentBatchUploadResponseDTO.FailureDetail.builder()
-                                .filename(file.getOriginalFilename())
-                                .reason(e.getMessage())
-                                .build();
+
+                AttachmentBatchUploadResponseDTO.FailureDetail failure = AttachmentBatchUploadResponseDTO.FailureDetail
+                        .builder()
+                        .filename(file.getOriginalFilename())
+                        .reason(e.getMessage())
+                        .build();
                 failures.add(failure);
             }
         }
-        
+
         int totalCount = files.size();
         int successCount = successes.size();
         int failureCount = failures.size();
-        
+
         log.info("批量上传附件完成: 总数={}, 成功={}, 失败={}", totalCount, successCount, failureCount);
-        
+
         return AttachmentBatchUploadResponseDTO.builder()
                 .totalCount(totalCount)
                 .successCount(successCount)
@@ -321,7 +321,8 @@ public class AttachmentService {
         // 删除物理文件
         try {
             Path baseStoragePath = getStoragePath();
-            Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory()).resolve(attachment.getDiskFilename());
+            Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                    .resolve(attachment.getDiskFilename());
             Files.deleteIfExists(filePath);
         } catch (IOException e) {
             log.error("删除文件失败: {}", e.getMessage(), e);
@@ -355,7 +356,7 @@ public class AttachmentService {
 
         return file;
     }
-    
+
     /**
      * 批量下载附件（打包为ZIP）
      */
@@ -363,7 +364,7 @@ public class AttachmentService {
         if (attachmentIds == null || attachmentIds.isEmpty()) {
             throw new BusinessException("附件ID列表不能为空");
         }
-        
+
         // 查询所有附件
         List<Attachment> attachments = new ArrayList<>();
         for (Long id : attachmentIds) {
@@ -372,11 +373,11 @@ public class AttachmentService {
                 attachments.add(attachment);
             }
         }
-        
+
         if (attachments.isEmpty()) {
             throw new BusinessException("未找到任何附件");
         }
-        
+
         // 创建临时ZIP文件（使用系统临时目录）
         Path tempDir = Paths.get(System.getProperty("java.io.tmpdir"));
         // 确保临时目录存在
@@ -386,37 +387,38 @@ public class AttachmentService {
             log.error("创建临时目录失败: {}", tempDir, e);
             throw new BusinessException("创建临时目录失败: " + e.getMessage());
         }
-        
-        String zipFilename = "attachments_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8) + ".zip";
+
+        String zipFilename = "attachments_" + System.currentTimeMillis() + "_"
+                + UUID.randomUUID().toString().substring(0, 8) + ".zip";
         Path zipPath = tempDir.resolve(zipFilename);
-        
+
         int successCount = 0;
         try {
             // 创建ZIP输出流
             try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipPath.toFile()))) {
                 byte[] buffer = new byte[8192];
                 Path baseStoragePath = getStoragePath();
-                
+
                 // 用于处理同名文件
                 Set<String> usedNames = new HashSet<>();
-                
+
                 for (Attachment attachment : attachments) {
                     try {
                         Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
                                 .resolve(attachment.getDiskFilename());
                         File file = filePath.toFile();
-                        
+
                         if (!file.exists()) {
                             log.warn("文件不存在，跳过: attachmentId={}, path={}", attachment.getId(), filePath);
                             continue;
                         }
-                        
+
                         // 处理同名文件：如果ZIP内已有同名文件，添加序号
                         String entryName = attachment.getFilename();
                         if (entryName == null || entryName.isEmpty()) {
                             entryName = "unnamed_" + attachment.getId();
                         }
-                        
+
                         int counter = 1;
                         String originalEntryName = entryName;
                         while (usedNames.contains(entryName)) {
@@ -431,11 +433,11 @@ public class AttachmentService {
                             counter++;
                         }
                         usedNames.add(entryName);
-                        
+
                         // 创建ZIP条目（使用处理后的文件名）
                         ZipEntry entry = new ZipEntry(entryName);
                         zos.putNextEntry(entry);
-                        
+
                         // 写入文件内容
                         try (InputStream is = new FileInputStream(file)) {
                             int len;
@@ -443,21 +445,21 @@ public class AttachmentService {
                                 zos.write(buffer, 0, len);
                             }
                         }
-                        
+
                         zos.closeEntry();
                         successCount++;
-                        
+
                         // 增加下载次数
                         attachment.setDownloads(attachment.getDownloads() + 1);
                         attachmentMapper.updateById(attachment);
-                        
+
                     } catch (Exception e) {
                         log.error("处理附件失败: attachmentId={}, error={}", attachment.getId(), e.getMessage(), e);
                         // 继续处理下一个文件
                     }
                 }
             }
-            
+
             if (successCount == 0) {
                 // 清理临时文件
                 try {
@@ -467,10 +469,10 @@ public class AttachmentService {
                 }
                 throw new BusinessException("没有成功打包任何文件");
             }
-            
+
             log.info("批量下载附件打包完成: zipPath={}, 总文件数={}, 成功数={}", zipPath, attachments.size(), successCount);
             return zipPath.toFile();
-            
+
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -575,14 +577,20 @@ public class AttachmentService {
         dto.setCreatedOn(attachment.getCreatedOn());
         dto.setDescription(attachment.getDescription());
         dto.setDownloadUrl("/api/attachments/" + attachment.getId() + "/download");
-        
+
         // 判断是否为图片文件
         boolean isImage = isImageFile(attachment.getContentType(), attachment.getFilename());
         dto.setIsImage(isImage);
-        
+
         // 如果是图片，设置缩略图URL
         if (isImage && thumbnailEnabled) {
             dto.setThumbnailUrl("/api/attachments/" + attachment.getId() + "/thumbnail");
+        }
+
+        // 判断是否可预览
+        boolean isPreviewable = isPreviewable(attachment.getContentType(), attachment.getFilename());
+        if (isPreviewable) {
+            dto.setPreviewUrl("/api/attachments/" + attachment.getId() + "/preview");
         }
 
         // 查询上传者信息
@@ -598,7 +606,7 @@ public class AttachmentService {
 
         return dto;
     }
-    
+
     /**
      * 判断是否为图片文件
      */
@@ -608,57 +616,57 @@ public class AttachmentService {
         }
         if (filename != null) {
             String lowerName = filename.toLowerCase();
-            return lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") 
+            return lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
                     || lowerName.endsWith(".png") || lowerName.endsWith(".gif")
                     || lowerName.endsWith(".bmp") || lowerName.endsWith(".webp");
         }
         return false;
     }
-    
+
     /**
      * 生成缩略图
      */
     private void generateThumbnail(File originalFile, Path directory, String diskFilename) throws IOException {
         String thumbnailFilename = "thumb_" + diskFilename;
         Path thumbnailPath = directory.resolve(thumbnailFilename);
-        
+
         // 读取原图
         BufferedImage originalImage = ImageIO.read(originalFile);
         if (originalImage == null) {
             throw new IOException("无法读取图片文件");
         }
-        
+
         // 计算缩略图尺寸（保持宽高比）
         int originalWidth = originalImage.getWidth();
         int originalHeight = originalImage.getHeight();
-        
+
         int targetWidth = thumbnailWidth;
         int targetHeight = thumbnailHeight;
-        
+
         // 如果原图比缩略图小，不生成缩略图
         if (originalWidth <= targetWidth && originalHeight <= targetHeight) {
             log.debug("原图尺寸较小，不生成缩略图: {}x{}", originalWidth, originalHeight);
             return;
         }
-        
+
         // 计算缩放比例，保持宽高比
         double widthRatio = (double) targetWidth / originalWidth;
         double heightRatio = (double) targetHeight / originalHeight;
         double ratio = Math.min(widthRatio, heightRatio);
-        
+
         int scaledWidth = (int) (originalWidth * ratio);
         int scaledHeight = (int) (originalHeight * ratio);
-        
+
         // 生成缩略图
         Thumbnails.of(originalFile)
                 .size(scaledWidth, scaledHeight)
                 .outputFormat("jpg") // 统一输出为JPG格式，减小文件大小
                 .outputQuality(0.85f) // 质量85%，平衡文件大小和图片质量
                 .toFile(thumbnailPath.toFile());
-        
+
         log.debug("缩略图生成成功: {}", thumbnailPath);
     }
-    
+
     /**
      * 获取缩略图文件
      */
@@ -667,31 +675,31 @@ public class AttachmentService {
         if (attachment == null) {
             throw new BusinessException("附件不存在");
         }
-        
+
         // 检查是否为图片
         if (!isImageFile(attachment.getContentType(), attachment.getFilename())) {
             throw new BusinessException("该附件不是图片文件，无法生成缩略图");
         }
-        
+
         Path baseStoragePath = getStoragePath();
         String thumbnailFilename = "thumb_" + attachment.getDiskFilename();
         Path thumbnailPath = baseStoragePath.resolve(attachment.getDiskDirectory())
                 .resolve(thumbnailFilename);
-        
+
         File thumbnailFile = thumbnailPath.toFile();
-        
+
         // 如果缩略图不存在，尝试生成
         if (!thumbnailFile.exists()) {
             Path originalFilePath = baseStoragePath.resolve(attachment.getDiskDirectory())
                     .resolve(attachment.getDiskFilename());
             File originalFile = originalFilePath.toFile();
-            
+
             if (!originalFile.exists()) {
                 throw new BusinessException("原文件不存在");
             }
-            
+
             try {
-                generateThumbnail(originalFile, baseStoragePath.resolve(attachment.getDiskDirectory()), 
+                generateThumbnail(originalFile, baseStoragePath.resolve(attachment.getDiskDirectory()),
                         attachment.getDiskFilename());
                 thumbnailFile = thumbnailPath.toFile();
             } catch (IOException e) {
@@ -699,11 +707,60 @@ public class AttachmentService {
                 throw new BusinessException("生成缩略图失败: " + e.getMessage());
             }
         }
-        
+
         if (!thumbnailFile.exists()) {
             throw new BusinessException("缩略图不存在");
         }
-        
+
         return thumbnailFile;
+    }
+
+    /**
+     * 判断文件是否可预览
+     */
+    public boolean isPreviewable(String contentType, String filename) {
+        // 图片文件
+        if (isImageFile(contentType, filename)) {
+            return true;
+        }
+
+        // PDF文件
+        if (contentType != null && contentType.equals("application/pdf")) {
+            return true;
+        }
+
+        if (filename != null) {
+            String lowerName = filename.toLowerCase();
+            if (lowerName.endsWith(".pdf")) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 获取预览文件
+     */
+    public File getPreviewFile(Long attachmentId) {
+        Attachment attachment = attachmentMapper.selectById(attachmentId);
+        if (attachment == null) {
+            throw new BusinessException("附件不存在");
+        }
+
+        if (!isPreviewable(attachment.getContentType(), attachment.getFilename())) {
+            throw new BusinessException("该文件类型不支持预览");
+        }
+
+        Path baseStoragePath = getStoragePath();
+        Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                .resolve(attachment.getDiskFilename());
+        File file = filePath.toFile();
+
+        if (!file.exists()) {
+            throw new BusinessException("文件不存在");
+        }
+
+        return file;
     }
 }

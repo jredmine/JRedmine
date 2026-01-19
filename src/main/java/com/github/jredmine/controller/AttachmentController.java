@@ -39,7 +39,7 @@ import java.nio.charset.StandardCharsets;
 @RequestMapping("/api/attachments")
 @RequiredArgsConstructor
 public class AttachmentController {
-    
+
     private final AttachmentService attachmentService;
 
     /**
@@ -63,7 +63,7 @@ public class AttachmentController {
         AttachmentResponseDTO result = attachmentService.uploadAttachment(file, request);
         return ApiResponse.success("附件上传成功", result);
     }
-    
+
     /**
      * 批量上传附件
      */
@@ -71,18 +71,14 @@ public class AttachmentController {
     @PostMapping(value = "/batch", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<AttachmentBatchUploadResponseDTO> batchUploadAttachments(
-            @Parameter(description = "上传的文件列表", required = true)
-            @RequestParam("files") List<MultipartFile> files,
-            @Parameter(description = "容器类型（如：Issue、Project、Document、WikiPage等）")
-            @RequestParam(value = "containerType", required = false) String containerType,
-            @Parameter(description = "容器ID")
-            @RequestParam(value = "containerId", required = false) Long containerId,
-            @Parameter(description = "文件描述")
-            @RequestParam(value = "description", required = false) String description) {
-        
+            @Parameter(description = "上传的文件列表", required = true) @RequestParam("files") List<MultipartFile> files,
+            @Parameter(description = "容器类型（如：Issue、Project、Document、WikiPage等）") @RequestParam(value = "containerType", required = false) String containerType,
+            @Parameter(description = "容器ID") @RequestParam(value = "containerId", required = false) Long containerId,
+            @Parameter(description = "文件描述") @RequestParam(value = "description", required = false) String description) {
+
         AttachmentBatchUploadResponseDTO result = attachmentService.batchUploadAttachments(
                 files, containerType, containerId, description);
-        
+
         if (result.getFailureCount() == 0) {
             return ApiResponse.success("批量上传成功", result);
         } else if (result.getSuccessCount() == 0) {
@@ -179,7 +175,7 @@ public class AttachmentController {
                 .headers(headers)
                 .body(resource);
     }
-    
+
     /**
      * 批量下载附件（打包为ZIP）
      */
@@ -187,13 +183,12 @@ public class AttachmentController {
     @PostMapping("/batch/download")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Resource> batchDownloadAttachments(
-            @Parameter(description = "附件ID列表", required = true)
-            @RequestBody List<Long> attachmentIds) {
-        
+            @Parameter(description = "附件ID列表", required = true) @RequestBody List<Long> attachmentIds) {
+
         // 打包为ZIP
         File zipFile = attachmentService.batchDownloadAttachments(attachmentIds);
         Resource resource = new FileSystemResource(zipFile);
-        
+
         // 处理文件名编码
         String filename = zipFile.getName();
         String encodedFilename;
@@ -203,18 +198,18 @@ public class AttachmentController {
         } catch (UnsupportedEncodingException e) {
             encodedFilename = filename;
         }
-        
+
         // 设置响应头
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename*=UTF-8''" + encodedFilename);
         headers.setContentType(MediaType.parseMediaType("application/zip"));
-        
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(resource);
     }
-    
+
     /**
      * 获取缩略图
      */
@@ -222,18 +217,79 @@ public class AttachmentController {
     @GetMapping("/{id}/thumbnail")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Resource> getThumbnail(
-            @Parameter(description = "附件ID", required = true)
-            @PathVariable Long id) {
-        
+            @Parameter(description = "附件ID", required = true) @PathVariable Long id) {
+
         // 获取缩略图文件
         File thumbnailFile = attachmentService.getThumbnail(id);
         Resource resource = new FileSystemResource(thumbnailFile);
-        
+
         // 设置响应头
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.IMAGE_JPEG);
         headers.setCacheControl("public, max-age=31536000"); // 缓存1年
-        
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(resource);
+    }
+
+    /**
+     * 预览附件
+     */
+    @Operation(summary = "预览附件", description = "在线预览附件（支持图片、PDF等格式）")
+    @GetMapping("/{id}/preview")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<Resource> previewAttachment(
+            @Parameter(description = "附件ID", required = true) @PathVariable Long id) {
+
+        // 获取附件信息
+        AttachmentResponseDTO attachment = attachmentService.getAttachmentById(id);
+
+        // 获取预览文件
+        File file = attachmentService.getPreviewFile(id);
+        Resource resource = new FileSystemResource(file);
+
+        // 设置响应头
+        HttpHeaders headers = new HttpHeaders();
+
+        // 根据文件类型设置Content-Type
+        String contentType = attachment.getContentType();
+        if (contentType == null || contentType.isEmpty()) {
+            // 根据文件扩展名推断
+            String filename = attachment.getFilename();
+            if (filename != null) {
+                String lowerName = filename.toLowerCase();
+                if (lowerName.endsWith(".pdf")) {
+                    contentType = "application/pdf";
+                } else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) {
+                    contentType = "image/jpeg";
+                } else if (lowerName.endsWith(".png")) {
+                    contentType = "image/png";
+                } else if (lowerName.endsWith(".gif")) {
+                    contentType = "image/gif";
+                } else if (lowerName.endsWith(".webp")) {
+                    contentType = "image/webp";
+                } else {
+                    contentType = MediaType.APPLICATION_OCTET_STREAM_VALUE;
+                }
+            } else {
+                contentType = MediaType.APPLICATION_OCTET_STREAM_VALUE;
+            }
+        }
+
+        headers.setContentType(MediaType.parseMediaType(contentType));
+
+        // 对于PDF，设置inline以便浏览器预览
+        if (contentType.equals("application/pdf")) {
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "inline");
+        } else if (contentType.startsWith("image/")) {
+            // 图片也设置为inline
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "inline");
+        }
+
+        // 设置缓存
+        headers.setCacheControl("public, max-age=31536000"); // 缓存1年
+
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(resource);
