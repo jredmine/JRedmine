@@ -139,6 +139,13 @@
             <version>7.2.5</version>
             <type>pom</type>
         </dependency>
+        
+        <!-- Thumbnailator for image thumbnail generation -->
+        <dependency>
+            <groupId>net.coobird</groupId>
+            <artifactId>thumbnailator</artifactId>
+            <version>0.4.20</version>
+        </dependency>
 
     </dependencies>
 

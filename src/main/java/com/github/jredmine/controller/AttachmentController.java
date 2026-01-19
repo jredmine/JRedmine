@@ -214,4 +214,28 @@ public class AttachmentController {
                 .headers(headers)
                 .body(resource);
     }
+    
+    /**
+     * 获取缩略图
+     */
+    @Operation(summary = "获取缩略图", description = "获取图片附件的缩略图")
+    @GetMapping("/{id}/thumbnail")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<Resource> getThumbnail(
+            @Parameter(description = "附件ID", required = true)
+            @PathVariable Long id) {
+        
+        // 获取缩略图文件
+        File thumbnailFile = attachmentService.getThumbnail(id);
+        Resource resource = new FileSystemResource(thumbnailFile);
+        
+        // 设置响应头
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.IMAGE_JPEG);
+        headers.setCacheControl("public, max-age=31536000"); // 缓存1年
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(resource);
+    }
 }

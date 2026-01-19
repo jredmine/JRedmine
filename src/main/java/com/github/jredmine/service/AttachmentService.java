@@ -38,6 +38,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import net.coobird.thumbnailator.Thumbnails;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -83,6 +87,15 @@ public class AttachmentService {
 
     @Value("${attachment.allowed-extensions:}")
     private String allowedExtensions;
+    
+    @Value("${attachment.thumbnail.enabled:true}")
+    private Boolean thumbnailEnabled;
+    
+    @Value("${attachment.thumbnail.width:200}")
+    private Integer thumbnailWidth;
+    
+    @Value("${attachment.thumbnail.height:200}")
+    private Integer thumbnailHeight;
 
     /**
      * 上传附件
@@ -112,6 +125,16 @@ public class AttachmentService {
             // 写入文件
             file.transferTo(filePath.toFile());
             log.debug("文件保存成功: {}", filePath.toAbsolutePath());
+            
+            // 5. 如果是图片文件，生成缩略图
+            if (thumbnailEnabled && isImageFile(file.getContentType(), originalFilename)) {
+                try {
+                    generateThumbnail(filePath.toFile(), fullPath, diskFilename);
+                } catch (Exception e) {
+                    log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
+                    // 缩略图生成失败不影响主流程，只记录警告
+                }
+            }
         } catch (IOException e) {
             log.error("保存文件失败: path={}, error={}", fullPath.toAbsolutePath(), e.getMessage(), e);
             throw new BusinessException("文件保存失败: " + e.getMessage());
@@ -552,6 +575,15 @@ public class AttachmentService {
         dto.setCreatedOn(attachment.getCreatedOn());
         dto.setDescription(attachment.getDescription());
         dto.setDownloadUrl("/api/attachments/" + attachment.getId() + "/download");
+        
+        // 判断是否为图片文件
+        boolean isImage = isImageFile(attachment.getContentType(), attachment.getFilename());
+        dto.setIsImage(isImage);
+        
+        // 如果是图片，设置缩略图URL
+        if (isImage && thumbnailEnabled) {
+            dto.setThumbnailUrl("/api/attachments/" + attachment.getId() + "/thumbnail");
+        }
 
         // 查询上传者信息
         User author = userMapper.selectById(attachment.getAuthorId());
@@ -565,5 +597,113 @@ public class AttachmentService {
         }
 
         return dto;
+    }
+    
+    /**
+     * 判断是否为图片文件
+     */
+    private boolean isImageFile(String contentType, String filename) {
+        if (contentType != null && contentType.startsWith("image/")) {
+            return true;
+        }
+        if (filename != null) {
+            String lowerName = filename.toLowerCase();
+            return lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") 
+                    || lowerName.endsWith(".png") || lowerName.endsWith(".gif")
+                    || lowerName.endsWith(".bmp") || lowerName.endsWith(".webp");
+        }
+        return false;
+    }
+    
+    /**
+     * 生成缩略图
+     */
+    private void generateThumbnail(File originalFile, Path directory, String diskFilename) throws IOException {
+        String thumbnailFilename = "thumb_" + diskFilename;
+        Path thumbnailPath = directory.resolve(thumbnailFilename);
+        
+        // 读取原图
+        BufferedImage originalImage = ImageIO.read(originalFile);
+        if (originalImage == null) {
+            throw new IOException("无法读取图片文件");
+        }
+        
+        // 计算缩略图尺寸（保持宽高比）
+        int originalWidth = originalImage.getWidth();
+        int originalHeight = originalImage.getHeight();
+        
+        int targetWidth = thumbnailWidth;
+        int targetHeight = thumbnailHeight;
+        
+        // 如果原图比缩略图小，不生成缩略图
+        if (originalWidth <= targetWidth && originalHeight <= targetHeight) {
+            log.debug("原图尺寸较小，不生成缩略图: {}x{}", originalWidth, originalHeight);
+            return;
+        }
+        
+        // 计算缩放比例，保持宽高比
+        double widthRatio = (double) targetWidth / originalWidth;
+        double heightRatio = (double) targetHeight / originalHeight;
+        double ratio = Math.min(widthRatio, heightRatio);
+        
+        int scaledWidth = (int) (originalWidth * ratio);
+        int scaledHeight = (int) (originalHeight * ratio);
+        
+        // 生成缩略图
+        Thumbnails.of(originalFile)
+                .size(scaledWidth, scaledHeight)
+                .outputFormat("jpg") // 统一输出为JPG格式，减小文件大小
+                .outputQuality(0.85f) // 质量85%，平衡文件大小和图片质量
+                .toFile(thumbnailPath.toFile());
+        
+        log.debug("缩略图生成成功: {}", thumbnailPath);
+    }
+    
+    /**
+     * 获取缩略图文件
+     */
+    public File getThumbnail(Long attachmentId) {
+        Attachment attachment = attachmentMapper.selectById(attachmentId);
+        if (attachment == null) {
+            throw new BusinessException("附件不存在");
+        }
+        
+        // 检查是否为图片
+        if (!isImageFile(attachment.getContentType(), attachment.getFilename())) {
+            throw new BusinessException("该附件不是图片文件，无法生成缩略图");
+        }
+        
+        Path baseStoragePath = getStoragePath();
+        String thumbnailFilename = "thumb_" + attachment.getDiskFilename();
+        Path thumbnailPath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                .resolve(thumbnailFilename);
+        
+        File thumbnailFile = thumbnailPath.toFile();
+        
+        // 如果缩略图不存在，尝试生成
+        if (!thumbnailFile.exists()) {
+            Path originalFilePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                    .resolve(attachment.getDiskFilename());
+            File originalFile = originalFilePath.toFile();
+            
+            if (!originalFile.exists()) {
+                throw new BusinessException("原文件不存在");
+            }
+            
+            try {
+                generateThumbnail(originalFile, baseStoragePath.resolve(attachment.getDiskDirectory()), 
+                        attachment.getDiskFilename());
+                thumbnailFile = thumbnailPath.toFile();
+            } catch (IOException e) {
+                log.error("生成缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                throw new BusinessException("生成缩略图失败: " + e.getMessage());
+            }
+        }
+        
+        if (!thumbnailFile.exists()) {
+            throw new BusinessException("缩略图不存在");
+        }
+        
+        return thumbnailFile;
     }
 }

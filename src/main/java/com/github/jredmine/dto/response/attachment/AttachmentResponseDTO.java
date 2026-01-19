@@ -48,4 +48,10 @@ public class AttachmentResponseDTO {
     
     @Schema(description = "下载URL")
     private String downloadUrl;
+    
+    @Schema(description = "缩略图URL（仅图片文件）")
+    private String thumbnailUrl;
+    
+    @Schema(description = "是否为图片文件")
+    private Boolean isImage;
 }
