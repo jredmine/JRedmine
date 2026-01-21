@@ -13,8 +13,10 @@ import com.github.jredmine.dto.response.user.UserSimpleResponseDTO;
 import com.github.jredmine.entity.Attachment;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.exception.BusinessException;
+import com.github.jredmine.enums.SettingKey;
 import com.github.jredmine.mapper.AttachmentMapper;
 import com.github.jredmine.mapper.user.UserMapper;
+import com.github.jredmine.service.SettingService;
 import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +43,8 @@ import java.time.format.DateTimeFormatter;
 import net.coobird.thumbnailator.Thumbnails;
 
 import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -63,6 +67,7 @@ public class AttachmentService {
     private final AttachmentMapper attachmentMapper;
     private final UserMapper userMapper;
     private final SecurityUtils securityUtils;
+    private final SettingService settingService;
 
     @Value("${attachment.storage.path:files}")
     private String storagePath;
@@ -126,13 +131,26 @@ public class AttachmentService {
             file.transferTo(filePath.toFile());
             log.debug("文件保存成功: {}", filePath.toAbsolutePath());
 
-            // 5. 如果是图片文件，生成缩略图
-            if (thumbnailEnabled && isImageFile(file.getContentType(), originalFilename)) {
-                try {
-                    generateThumbnail(filePath.toFile(), fullPath, diskFilename);
-                } catch (Exception e) {
-                    log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
-                    // 缩略图生成失败不影响主流程，只记录警告
+            // 5. 如果是图片文件，处理图片（生成缩略图、添加水印）
+            if (isImageFile(file.getContentType(), originalFilename)) {
+                // 生成缩略图
+                if (thumbnailEnabled) {
+                    try {
+                        generateThumbnail(filePath.toFile(), fullPath, diskFilename);
+                    } catch (Exception e) {
+                        log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
+                        // 缩略图生成失败不影响主流程，只记录警告
+                    }
+                }
+                
+                // 添加水印
+                if (isWatermarkEnabled()) {
+                    try {
+                        addWatermark(filePath.toFile());
+                    } catch (Exception e) {
+                        log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
+                        // 水印添加失败不影响主流程，只记录警告
+                    }
                 }
             }
         } catch (IOException e) {
@@ -762,5 +780,163 @@ public class AttachmentService {
         }
 
         return file;
+    }
+    
+    /**
+     * 判断是否启用水印
+     */
+    private boolean isWatermarkEnabled() {
+        try {
+            String value = settingService.getSetting(SettingKey.WATERMARK_ENABLED.getKey());
+            return "true".equalsIgnoreCase(value);
+        } catch (Exception e) {
+            log.warn("获取水印配置失败，使用默认值false: {}", e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 获取水印配置
+     */
+    private String getWatermarkText() {
+        try {
+            String value = settingService.getSetting(SettingKey.WATERMARK_TEXT.getKey());
+            return value != null ? value : "JRedmine";
+        } catch (Exception e) {
+            log.warn("获取水印文本失败，使用默认值: {}", e.getMessage());
+            return "JRedmine";
+        }
+    }
+    
+    private String getWatermarkPosition() {
+        try {
+            String value = settingService.getSetting(SettingKey.WATERMARK_POSITION.getKey());
+            return value != null ? value : "bottom-right";
+        } catch (Exception e) {
+            return "bottom-right";
+        }
+    }
+    
+    private float getWatermarkOpacity() {
+        try {
+            String value = settingService.getSetting(SettingKey.WATERMARK_OPACITY.getKey());
+            return value != null ? Float.parseFloat(value) : 0.5f;
+        } catch (Exception e) {
+            return 0.5f;
+        }
+    }
+    
+    private int getWatermarkFontSize() {
+        try {
+            String value = settingService.getSetting(SettingKey.WATERMARK_FONT_SIZE.getKey());
+            return value != null ? Integer.parseInt(value) : 24;
+        } catch (Exception e) {
+            return 24;
+        }
+    }
+    
+    /**
+     * 添加水印
+     */
+    private void addWatermark(File imageFile) throws IOException {
+        // 读取原图
+        BufferedImage originalImage = ImageIO.read(imageFile);
+        if (originalImage == null) {
+            throw new IOException("无法读取图片文件");
+        }
+        
+        // 创建Graphics2D对象
+        Graphics2D g2d = (Graphics2D) originalImage.getGraphics();
+        
+        // 设置抗锯齿
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        
+        // 设置透明度
+        float opacity = getWatermarkOpacity();
+        AlphaComposite alphaComposite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity);
+        g2d.setComposite(alphaComposite);
+        
+        // 设置字体和颜色
+        int fontSize = getWatermarkFontSize();
+        Font font = new Font("Arial", Font.BOLD, fontSize);
+        g2d.setFont(font);
+        g2d.setColor(Color.WHITE);
+        
+        // 获取水印文本
+        String watermarkText = getWatermarkText();
+        
+        // 计算文本尺寸
+        FontMetrics fontMetrics = g2d.getFontMetrics();
+        Rectangle2D textBounds = fontMetrics.getStringBounds(watermarkText, g2d);
+        int textWidth = (int) textBounds.getWidth();
+        int textHeight = (int) textBounds.getHeight();
+        
+        // 计算水印位置
+        int imageWidth = originalImage.getWidth();
+        int imageHeight = originalImage.getHeight();
+        int x, y;
+        
+        String position = getWatermarkPosition();
+        int padding = 20; // 边距
+        
+        switch (position.toLowerCase()) {
+            case "top-left":
+                x = padding;
+                y = padding + textHeight;
+                break;
+            case "top-right":
+                x = imageWidth - textWidth - padding;
+                y = padding + textHeight;
+                break;
+            case "bottom-left":
+                x = padding;
+                y = imageHeight - padding;
+                break;
+            case "bottom-right":
+                x = imageWidth - textWidth - padding;
+                y = imageHeight - padding;
+                break;
+            case "center":
+                x = (imageWidth - textWidth) / 2;
+                y = (imageHeight + textHeight) / 2;
+                break;
+            default:
+                x = imageWidth - textWidth - padding;
+                y = imageHeight - padding;
+        }
+        
+        // 绘制文本阴影（增强可读性）
+        g2d.setColor(new Color(0, 0, 0, (int) (opacity * 128)));
+        g2d.drawString(watermarkText, x + 2, y + 2);
+        
+        // 绘制水印文本
+        g2d.setColor(Color.WHITE);
+        g2d.drawString(watermarkText, x, y);
+        
+        // 释放资源
+        g2d.dispose();
+        
+        // 保存图片
+        String formatName = getImageFormat(imageFile);
+        ImageIO.write(originalImage, formatName, imageFile);
+        
+        log.debug("水印添加成功: {}", imageFile.getName());
+    }
+    
+    /**
+     * 获取图片格式
+     */
+    private String getImageFormat(File imageFile) {
+        String filename = imageFile.getName().toLowerCase();
+        if (filename.endsWith(".png")) {
+            return "png";
+        } else if (filename.endsWith(".gif")) {
+            return "gif";
+        } else if (filename.endsWith(".bmp")) {
+            return "bmp";
+        } else {
+            return "jpg"; // 默认JPG
+        }
     }
 }

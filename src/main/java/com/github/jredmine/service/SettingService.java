@@ -160,27 +160,29 @@ public class SettingService {
      * @return 设置项值
      */
     public String getSetting(String name) {
-        // 先从缓存获取
-        if (settingCache.containsKey(name)) {
-            return settingCache.get(name);
-        }
-
-        // 从数据库查询
+        // 从数据库查询（优先使用数据库的值，确保与数据库同步）
         Setting setting = settingMapper.selectOne(
                 new LambdaQueryWrapper<Setting>().eq(Setting::getName, name));
 
         String value;
         if (setting != null) {
+            // 数据库有值，使用数据库的值
             value = setting.getValue();
-        } else {
-            // 如果数据库没有，返回默认值
-            SettingKey settingKey = SettingKey.fromKey(name);
-            value = settingKey != null ? settingKey.getDefaultValue() : null;
-        }
-
-        // 放入缓存
-        if (value != null) {
+            // 更新缓存
             settingCache.put(name, value);
+        } else {
+            // 如果数据库没有，检查缓存
+            if (settingCache.containsKey(name)) {
+                value = settingCache.get(name);
+            } else {
+                // 缓存也没有，返回默认值
+                SettingKey settingKey = SettingKey.fromKey(name);
+                value = settingKey != null ? settingKey.getDefaultValue() : null;
+                // 将默认值放入缓存
+                if (value != null) {
+                    settingCache.put(name, value);
+                }
+            }
         }
 
         return value;

@@ -130,6 +130,31 @@ public enum SettingKey {
      */
     THUMBNAIL_ENABLED("thumbnails_enabled", "缩略图启用", "true", SettingCategory.ATTACHMENT),
     
+    /**
+     * 水印是否启用
+     */
+    WATERMARK_ENABLED("watermark_enabled", "水印启用", "false", SettingCategory.ATTACHMENT),
+    
+    /**
+     * 水印文本
+     */
+    WATERMARK_TEXT("watermark_text", "水印文本", "JRedmine", SettingCategory.ATTACHMENT),
+    
+    /**
+     * 水印位置（top-left, top-right, bottom-left, bottom-right, center）
+     */
+    WATERMARK_POSITION("watermark_position", "水印位置", "bottom-right", SettingCategory.ATTACHMENT),
+    
+    /**
+     * 水印透明度（0.0-1.0）
+     */
+    WATERMARK_OPACITY("watermark_opacity", "水印透明度", "0.5", SettingCategory.ATTACHMENT),
+    
+    /**
+     * 水印字体大小
+     */
+    WATERMARK_FONT_SIZE("watermark_font_size", "水印字体大小", "24", SettingCategory.ATTACHMENT),
+    
     // ========== 通知设置 ==========
     /**
      * 默认通知给任务作者
