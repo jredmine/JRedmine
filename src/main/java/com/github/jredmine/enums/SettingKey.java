@@ -131,6 +131,36 @@ public enum SettingKey {
     THUMBNAIL_ENABLED("thumbnails_enabled", "缩略图启用", "true", SettingCategory.ATTACHMENT),
     
     /**
+     * 存储类型（local/oss）
+     */
+    ATTACHMENT_STORAGE_TYPE("attachment_storage_type", "存储类型", "local", SettingCategory.ATTACHMENT),
+    
+    /**
+     * OSS Endpoint
+     */
+    OSS_ENDPOINT("oss_endpoint", "OSS Endpoint", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * OSS AccessKey ID
+     */
+    OSS_ACCESS_KEY_ID("oss_access_key_id", "OSS AccessKey ID", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * OSS AccessKey Secret
+     */
+    OSS_ACCESS_KEY_SECRET("oss_access_key_secret", "OSS AccessKey Secret", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * OSS Bucket名称
+     */
+    OSS_BUCKET_NAME("oss_bucket_name", "OSS Bucket名称", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * OSS 存储路径前缀
+     */
+    OSS_PATH_PREFIX("oss_path_prefix", "OSS路径前缀", "attachments", SettingCategory.ATTACHMENT),
+    
+    /**
      * 水印是否启用
      */
     WATERMARK_ENABLED("watermark_enabled", "水印启用", "false", SettingCategory.ATTACHMENT),

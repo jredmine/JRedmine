@@ -68,6 +68,7 @@ public class AttachmentService {
     private final UserMapper userMapper;
     private final SecurityUtils securityUtils;
     private final SettingService settingService;
+    private final OssService ossService;
 
     @Value("${attachment.storage.path:files}")
     private String storagePath;
@@ -103,6 +104,38 @@ public class AttachmentService {
     private Integer thumbnailHeight;
 
     /**
+     * 获取存储类型（local/oss）
+     */
+    private String getStorageType() {
+        try {
+            String type = settingService.getSetting(SettingKey.ATTACHMENT_STORAGE_TYPE.getKey());
+            return (type != null && !type.isEmpty()) ? type : "local";
+        } catch (Exception e) {
+            log.warn("获取存储类型失败，使用默认值local: {}", e.getMessage());
+            return "local";
+        }
+    }
+
+    /**
+     * 判断是否使用OSS存储（根据配置）
+     */
+    private boolean isOssStorage() {
+        return "oss".equalsIgnoreCase(getStorageType());
+    }
+    
+    /**
+     * 判断附件是否使用OSS存储（根据记录的存储类型）
+     */
+    private boolean isOssStorage(Attachment attachment) {
+        String storageType = attachment.getStorageType();
+        // 兼容历史数据：如果storageType为空，默认使用配置判断
+        if (storageType == null || storageType.isEmpty()) {
+            return isOssStorage();
+        }
+        return "oss".equalsIgnoreCase(storageType);
+    }
+
+    /**
      * 上传附件
      */
     @Transactional(rollbackFor = Exception.class)
@@ -120,42 +153,92 @@ public class AttachmentService {
         // 3. 计算文件摘要
         String digest = calculateFileDigest(file);
 
-        // 4. 保存文件到磁盘
-        Path baseStoragePath = getStoragePath();
-        Path fullPath = baseStoragePath.resolve(diskDirectory);
-        try {
-            // 确保目录存在
-            Files.createDirectories(fullPath);
-            Path filePath = fullPath.resolve(diskFilename);
-            // 写入文件
-            file.transferTo(filePath.toFile());
-            log.debug("文件保存成功: {}", filePath.toAbsolutePath());
-
-            // 5. 如果是图片文件，处理图片（生成缩略图、添加水印）
-            if (isImageFile(file.getContentType(), originalFilename)) {
-                // 生成缩略图
-                if (thumbnailEnabled) {
+        // 4. 保存文件（根据存储类型选择本地或OSS）
+        String objectKey = diskDirectory + "/" + diskFilename;
+        
+        if (isOssStorage()) {
+            // OSS存储
+            try {
+                // 如果是图片文件，需要先处理（缩略图、水印）
+                InputStream uploadStream = file.getInputStream();
+                
+                if (isImageFile(file.getContentType(), originalFilename)) {
+                    // 先保存到临时文件进行处理
+                    File tempFile = File.createTempFile("upload_", "_" + diskFilename);
                     try {
-                        generateThumbnail(filePath.toFile(), fullPath, diskFilename);
-                    } catch (Exception e) {
-                        log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
-                        // 缩略图生成失败不影响主流程，只记录警告
+                        file.transferTo(tempFile);
+                        
+                        // 处理图片（缩略图、水印）
+                        if (thumbnailEnabled) {
+                            try {
+                                generateThumbnailForOss(tempFile, diskDirectory, diskFilename);
+                            } catch (Exception e) {
+                                log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
+                            }
+                        }
+                        
+                        if (isWatermarkEnabled()) {
+                            try {
+                                addWatermark(tempFile);
+                            } catch (Exception e) {
+                                log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
+                            }
+                        }
+                        
+                        // 上传处理后的文件到OSS
+                        try (FileInputStream fis = new FileInputStream(tempFile)) {
+                            ossService.uploadFile(fis, objectKey, file.getContentType(), tempFile.length());
+                        }
+                    } finally {
+                        // 清理临时文件
+                        tempFile.delete();
                     }
+                } else {
+                    // 非图片文件直接上传
+                    ossService.uploadFile(uploadStream, objectKey, file.getContentType(), file.getSize());
                 }
                 
-                // 添加水印
-                if (isWatermarkEnabled()) {
-                    try {
-                        addWatermark(filePath.toFile());
-                    } catch (Exception e) {
-                        log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
-                        // 水印添加失败不影响主流程，只记录警告
+                log.debug("文件上传到OSS成功: objectKey={}", objectKey);
+            } catch (Exception e) {
+                log.error("上传文件到OSS失败: objectKey={}, error={}", objectKey, e.getMessage(), e);
+                throw new BusinessException("上传文件到OSS失败: " + e.getMessage());
+            }
+        } else {
+            // 本地存储
+            Path baseStoragePath = getStoragePath();
+            Path fullPath = baseStoragePath.resolve(diskDirectory);
+            try {
+                // 确保目录存在
+                Files.createDirectories(fullPath);
+                Path filePath = fullPath.resolve(diskFilename);
+                // 写入文件
+                file.transferTo(filePath.toFile());
+                log.debug("文件保存成功: {}", filePath.toAbsolutePath());
+
+                // 如果是图片文件，处理图片（生成缩略图、添加水印）
+                if (isImageFile(file.getContentType(), originalFilename)) {
+                    // 生成缩略图
+                    if (thumbnailEnabled) {
+                        try {
+                            generateThumbnail(filePath.toFile(), fullPath, diskFilename);
+                        } catch (Exception e) {
+                            log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
+                        }
+                    }
+                    
+                    // 添加水印
+                    if (isWatermarkEnabled()) {
+                        try {
+                            addWatermark(filePath.toFile());
+                        } catch (Exception e) {
+                            log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
+                        }
                     }
                 }
+            } catch (IOException e) {
+                log.error("保存文件失败: path={}, error={}", fullPath.toAbsolutePath(), e.getMessage(), e);
+                throw new BusinessException("文件保存失败: " + e.getMessage());
             }
-        } catch (IOException e) {
-            log.error("保存文件失败: path={}, error={}", fullPath.toAbsolutePath(), e.getMessage(), e);
-            throw new BusinessException("文件保存失败: " + e.getMessage());
         }
 
         // 5. 创建附件记录
@@ -172,6 +255,8 @@ public class AttachmentService {
         attachment.setAuthorId(currentUserId);
         attachment.setDescription(request.getDescription());
         attachment.setCreatedOn(LocalDateTime.now());
+        // 记录存储类型（快照，避免配置变更后无法找到文件）
+        attachment.setStorageType(isOssStorage() ? "oss" : "local");
 
         attachmentMapper.insert(attachment);
 
@@ -336,13 +421,33 @@ public class AttachmentService {
         // 删除数据库记录
         attachmentMapper.deleteById(id);
 
-        // 删除物理文件
+        // 删除物理文件（根据记录的存储类型）
         try {
-            Path baseStoragePath = getStoragePath();
-            Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
-                    .resolve(attachment.getDiskFilename());
-            Files.deleteIfExists(filePath);
-        } catch (IOException e) {
+            if (isOssStorage(attachment)) {
+                // OSS存储
+                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+                ossService.deleteFile(objectKey);
+                
+                // 如果存在缩略图，也删除
+                if (isImageFile(attachment.getContentType(), attachment.getFilename())) {
+                    String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
+                    ossService.deleteFile(thumbnailKey);
+                }
+            } else {
+                // 本地存储
+                Path baseStoragePath = getStoragePath();
+                Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                        .resolve(attachment.getDiskFilename());
+                Files.deleteIfExists(filePath);
+                
+                // 如果存在缩略图，也删除
+                if (isImageFile(attachment.getContentType(), attachment.getFilename())) {
+                    Path thumbnailPath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                            .resolve("thumb_" + attachment.getDiskFilename());
+                    Files.deleteIfExists(thumbnailPath);
+                }
+            }
+        } catch (Exception e) {
             log.error("删除文件失败: {}", e.getMessage(), e);
             // 继续执行，不抛出异常
         }
@@ -352,6 +457,7 @@ public class AttachmentService {
 
     /**
      * 下载附件（获取文件）
+     * 注意：OSS存储时，会先下载到临时文件
      */
     public File downloadAttachment(Long id) {
         Attachment attachment = attachmentMapper.selectById(id);
@@ -363,16 +469,46 @@ public class AttachmentService {
         attachment.setDownloads(attachment.getDownloads() + 1);
         attachmentMapper.updateById(attachment);
 
-        Path baseStoragePath = getStoragePath();
-        Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory()).resolve(attachment.getDiskFilename());
-        File file = filePath.toFile();
+        if (isOssStorage(attachment)) {
+            // OSS存储：下载到临时文件
+            try {
+                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+                InputStream inputStream = ossService.downloadFile(objectKey);
+                
+                // 创建临时文件
+                File tempFile = File.createTempFile("oss_download_", "_" + attachment.getDiskFilename());
+                tempFile.deleteOnExit();
+                
+                // 将OSS文件流写入临时文件
+                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = inputStream.read(buffer)) != -1) {
+                        fos.write(buffer, 0, bytesRead);
+                    }
+                } finally {
+                    inputStream.close();
+                }
+                
+                return tempFile;
+            } catch (Exception e) {
+                log.error("从OSS下载文件失败: attachmentId={}, error={}", id, e.getMessage(), e);
+                throw new BusinessException("下载文件失败: " + e.getMessage());
+            }
+        } else {
+            // 本地存储
+            Path baseStoragePath = getStoragePath();
+            Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                    .resolve(attachment.getDiskFilename());
+            File file = filePath.toFile();
 
-        if (!file.exists()) {
-            log.error("文件不存在: {}", filePath);
-            throw new BusinessException("文件不存在");
+            if (!file.exists()) {
+                log.error("文件不存在: {}", filePath);
+                throw new BusinessException("文件不存在");
+            }
+
+            return file;
         }
-
-        return file;
     }
 
     /**
@@ -415,20 +551,56 @@ public class AttachmentService {
             // 创建ZIP输出流
             try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipPath.toFile()))) {
                 byte[] buffer = new byte[8192];
-                Path baseStoragePath = getStoragePath();
 
                 // 用于处理同名文件
                 Set<String> usedNames = new HashSet<>();
 
                 for (Attachment attachment : attachments) {
+                    InputStream fileInputStream = null;
+                    File tempFile = null;
+                    
                     try {
-                        Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
-                                .resolve(attachment.getDiskFilename());
-                        File file = filePath.toFile();
+                        // 根据存储类型获取文件流
+                        if (isOssStorage(attachment)) {
+                            // OSS存储：下载到临时文件
+                            try {
+                                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+                                InputStream ossStream = ossService.downloadFile(objectKey);
+                                
+                                // 创建临时文件
+                                tempFile = File.createTempFile("oss_batch_", "_" + attachment.getDiskFilename());
+                                tempFile.deleteOnExit();
+                                
+                                // 将OSS文件流写入临时文件
+                                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                                    byte[] tempBuffer = new byte[8192];
+                                    int bytesRead;
+                                    while ((bytesRead = ossStream.read(tempBuffer)) != -1) {
+                                        fos.write(tempBuffer, 0, bytesRead);
+                                    }
+                                } finally {
+                                    ossStream.close();
+                                }
+                                
+                                fileInputStream = new FileInputStream(tempFile);
+                            } catch (Exception e) {
+                                log.warn("从OSS下载文件失败，跳过: attachmentId={}, error={}", 
+                                        attachment.getId(), e.getMessage());
+                                continue;
+                            }
+                        } else {
+                            // 本地存储
+                            Path baseStoragePath = getStoragePath();
+                            Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                                    .resolve(attachment.getDiskFilename());
+                            File file = filePath.toFile();
 
-                        if (!file.exists()) {
-                            log.warn("文件不存在，跳过: attachmentId={}, path={}", attachment.getId(), filePath);
-                            continue;
+                            if (!file.exists()) {
+                                log.warn("文件不存在，跳过: attachmentId={}, path={}", attachment.getId(), filePath);
+                                continue;
+                            }
+                            
+                            fileInputStream = new FileInputStream(file);
                         }
 
                         // 处理同名文件：如果ZIP内已有同名文件，添加序号
@@ -457,7 +629,7 @@ public class AttachmentService {
                         zos.putNextEntry(entry);
 
                         // 写入文件内容
-                        try (InputStream is = new FileInputStream(file)) {
+                        try (InputStream is = fileInputStream) {
                             int len;
                             while ((len = is.read(buffer)) > 0) {
                                 zos.write(buffer, 0, len);
@@ -467,6 +639,11 @@ public class AttachmentService {
                         zos.closeEntry();
                         successCount++;
 
+                        // 清理临时文件
+                        if (tempFile != null && tempFile.exists()) {
+                            tempFile.delete();
+                        }
+
                         // 增加下载次数
                         attachment.setDownloads(attachment.getDownloads() + 1);
                         attachmentMapper.updateById(attachment);
@@ -474,6 +651,19 @@ public class AttachmentService {
                     } catch (Exception e) {
                         log.error("处理附件失败: attachmentId={}, error={}", attachment.getId(), e.getMessage(), e);
                         // 继续处理下一个文件
+                    } finally {
+                        // 确保关闭流
+                        if (fileInputStream != null) {
+                            try {
+                                fileInputStream.close();
+                            } catch (IOException e) {
+                                log.warn("关闭文件流失败: {}", e.getMessage());
+                            }
+                        }
+                        // 清理临时文件
+                        if (tempFile != null && tempFile.exists()) {
+                            tempFile.delete();
+                        }
                     }
                 }
             }
@@ -642,7 +832,55 @@ public class AttachmentService {
     }
 
     /**
-     * 生成缩略图
+     * 为OSS存储生成缩略图
+     */
+    private void generateThumbnailForOss(File originalFile, String diskDirectory, String diskFilename) throws IOException {
+        // 先保存到临时文件
+        File tempThumbnail = File.createTempFile("thumb_", "_" + diskFilename);
+        try {
+            // 生成缩略图到临时文件
+            BufferedImage originalImage = ImageIO.read(originalFile);
+            if (originalImage == null) {
+                throw new IOException("无法读取图片文件");
+            }
+
+            int originalWidth = originalImage.getWidth();
+            int originalHeight = originalImage.getHeight();
+            int targetWidth = thumbnailWidth;
+            int targetHeight = thumbnailHeight;
+
+            if (originalWidth <= targetWidth && originalHeight <= targetHeight) {
+                log.debug("原图尺寸较小，不生成缩略图: {}x{}", originalWidth, originalHeight);
+                return;
+            }
+
+            double widthRatio = (double) targetWidth / originalWidth;
+            double heightRatio = (double) targetHeight / originalHeight;
+            double ratio = Math.min(widthRatio, heightRatio);
+
+            int scaledWidth = (int) (originalWidth * ratio);
+            int scaledHeight = (int) (originalHeight * ratio);
+
+            Thumbnails.of(originalFile)
+                    .size(scaledWidth, scaledHeight)
+                    .outputFormat("jpg")
+                    .outputQuality(0.85f)
+                    .toFile(tempThumbnail);
+
+            // 上传缩略图到OSS
+            String thumbnailKey = diskDirectory + "/thumb_" + diskFilename;
+            try (FileInputStream fis = new FileInputStream(tempThumbnail)) {
+                ossService.uploadFile(fis, thumbnailKey, "image/jpeg", tempThumbnail.length());
+            }
+            
+            log.debug("OSS缩略图生成成功: {}", thumbnailKey);
+        } finally {
+            tempThumbnail.delete();
+        }
+    }
+
+    /**
+     * 生成缩略图（本地存储）
      */
     private void generateThumbnail(File originalFile, Path directory, String diskFilename) throws IOException {
         String thumbnailFilename = "thumb_" + diskFilename;
@@ -699,38 +937,99 @@ public class AttachmentService {
             throw new BusinessException("该附件不是图片文件，无法生成缩略图");
         }
 
-        Path baseStoragePath = getStoragePath();
-        String thumbnailFilename = "thumb_" + attachment.getDiskFilename();
-        Path thumbnailPath = baseStoragePath.resolve(attachment.getDiskDirectory())
-                .resolve(thumbnailFilename);
-
-        File thumbnailFile = thumbnailPath.toFile();
-
-        // 如果缩略图不存在，尝试生成
-        if (!thumbnailFile.exists()) {
-            Path originalFilePath = baseStoragePath.resolve(attachment.getDiskDirectory())
-                    .resolve(attachment.getDiskFilename());
-            File originalFile = originalFilePath.toFile();
-
-            if (!originalFile.exists()) {
-                throw new BusinessException("原文件不存在");
+        if (isOssStorage(attachment)) {
+            // OSS存储
+            String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
+            
+            // 检查缩略图是否存在
+            if (!ossService.fileExists(thumbnailKey)) {
+                // 如果不存在，尝试生成
+                String originalKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+                if (!ossService.fileExists(originalKey)) {
+                    throw new BusinessException("原文件不存在");
+                }
+                
+                // 下载原文件到临时文件
+                try {
+                    InputStream originalStream = ossService.downloadFile(originalKey);
+                    File tempOriginal = File.createTempFile("oss_original_", "_" + attachment.getDiskFilename());
+                    tempOriginal.deleteOnExit();
+                    
+                    try (FileOutputStream fos = new FileOutputStream(tempOriginal)) {
+                        byte[] buffer = new byte[8192];
+                        int bytesRead;
+                        while ((bytesRead = originalStream.read(buffer)) != -1) {
+                            fos.write(buffer, 0, bytesRead);
+                        }
+                    } finally {
+                        originalStream.close();
+                    }
+                    
+                    // 生成缩略图并上传到OSS
+                    generateThumbnailForOss(tempOriginal, attachment.getDiskDirectory(), attachment.getDiskFilename());
+                    tempOriginal.delete();
+                } catch (Exception e) {
+                    log.error("生成OSS缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                    throw new BusinessException("生成缩略图失败: " + e.getMessage());
+                }
             }
-
+            
+            // 下载缩略图到临时文件
             try {
-                generateThumbnail(originalFile, baseStoragePath.resolve(attachment.getDiskDirectory()),
-                        attachment.getDiskFilename());
-                thumbnailFile = thumbnailPath.toFile();
-            } catch (IOException e) {
-                log.error("生成缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
-                throw new BusinessException("生成缩略图失败: " + e.getMessage());
+                InputStream thumbnailStream = ossService.downloadFile(thumbnailKey);
+                File tempThumbnail = File.createTempFile("oss_thumb_", "_" + attachment.getDiskFilename());
+                tempThumbnail.deleteOnExit();
+                
+                try (FileOutputStream fos = new FileOutputStream(tempThumbnail)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = thumbnailStream.read(buffer)) != -1) {
+                        fos.write(buffer, 0, bytesRead);
+                    }
+                } finally {
+                    thumbnailStream.close();
+                }
+                
+                return tempThumbnail;
+            } catch (Exception e) {
+                log.error("从OSS下载缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                throw new BusinessException("获取缩略图失败: " + e.getMessage());
             }
-        }
+        } else {
+            // 本地存储
+            Path baseStoragePath = getStoragePath();
+            String thumbnailFilename = "thumb_" + attachment.getDiskFilename();
+            Path thumbnailPath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                    .resolve(thumbnailFilename);
 
-        if (!thumbnailFile.exists()) {
-            throw new BusinessException("缩略图不存在");
-        }
+            File thumbnailFile = thumbnailPath.toFile();
 
-        return thumbnailFile;
+            // 如果缩略图不存在，尝试生成
+            if (!thumbnailFile.exists()) {
+                Path originalFilePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                        .resolve(attachment.getDiskFilename());
+                File originalFile = originalFilePath.toFile();
+
+                if (!originalFile.exists()) {
+                    throw new BusinessException("原文件不存在");
+                }
+
+                try {
+                    generateThumbnail(originalFile, baseStoragePath.resolve(attachment.getDiskDirectory()),
+                            attachment.getDiskFilename());
+                    thumbnailFile = thumbnailPath.toFile();
+                } catch (IOException e) {
+                    log.error("生成缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                    throw new BusinessException("生成缩略图失败: " + e.getMessage());
+                }
+            }
+
+            if (!thumbnailFile.exists()) {
+                throw new BusinessException("缩略图不存在");
+            }
+
+            return thumbnailFile;
+        }
     }
 
     /**
@@ -770,16 +1069,43 @@ public class AttachmentService {
             throw new BusinessException("该文件类型不支持预览");
         }
 
-        Path baseStoragePath = getStoragePath();
-        Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
-                .resolve(attachment.getDiskFilename());
-        File file = filePath.toFile();
+        if (isOssStorage(attachment)) {
+            // OSS存储：下载到临时文件
+            try {
+                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+                InputStream inputStream = ossService.downloadFile(objectKey);
+                
+                File tempFile = File.createTempFile("oss_preview_", "_" + attachment.getDiskFilename());
+                tempFile.deleteOnExit();
+                
+                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = inputStream.read(buffer)) != -1) {
+                        fos.write(buffer, 0, bytesRead);
+                    }
+                } finally {
+                    inputStream.close();
+                }
+                
+                return tempFile;
+            } catch (Exception e) {
+                log.error("从OSS下载预览文件失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                throw new BusinessException("获取预览文件失败: " + e.getMessage());
+            }
+        } else {
+            // 本地存储
+            Path baseStoragePath = getStoragePath();
+            Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
+                    .resolve(attachment.getDiskFilename());
+            File file = filePath.toFile();
 
-        if (!file.exists()) {
-            throw new BusinessException("文件不存在");
+            if (!file.exists()) {
+                throw new BusinessException("文件不存在");
+            }
+
+            return file;
         }
-
-        return file;
     }
     
     /**

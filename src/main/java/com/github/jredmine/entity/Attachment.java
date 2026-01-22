@@ -95,4 +95,11 @@ public class Attachment {
      */
     @TableField("disk_directory")
     private String diskDirectory;
+    
+    /**
+     * 存储类型（local/oss）
+     * 记录附件上传时的存储类型，避免配置变更后无法找到历史文件
+     */
+    @TableField("storage_type")
+    private String storageType;
 }
