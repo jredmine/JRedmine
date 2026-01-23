@@ -170,6 +170,13 @@
             <artifactId>jaxb-runtime</artifactId>
             <version>2.3.3</version>
         </dependency>
+        
+        <!-- 腾讯云COS SDK -->
+        <dependency>
+            <groupId>com.qcloud</groupId>
+            <artifactId>cos_api</artifactId>
+            <version>5.6.259</version>
+        </dependency>
 
     </dependencies>
 

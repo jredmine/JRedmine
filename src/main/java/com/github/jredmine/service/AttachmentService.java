@@ -69,6 +69,7 @@ public class AttachmentService {
     private final SecurityUtils securityUtils;
     private final SettingService settingService;
     private final OssService ossService;
+    private final CosService cosService;
 
     @Value("${attachment.storage.path:files}")
     private String storagePath;
@@ -104,7 +105,7 @@ public class AttachmentService {
     private Integer thumbnailHeight;
 
     /**
-     * 获取存储类型（local/oss）
+     * 获取存储类型（local/oss/cos）
      */
     private String getStorageType() {
         try {
@@ -124,6 +125,13 @@ public class AttachmentService {
     }
     
     /**
+     * 判断是否使用COS存储（根据配置）
+     */
+    private boolean isCosStorage() {
+        return "cos".equalsIgnoreCase(getStorageType());
+    }
+    
+    /**
      * 判断附件是否使用OSS存储（根据记录的存储类型）
      */
     private boolean isOssStorage(Attachment attachment) {
@@ -133,6 +141,64 @@ public class AttachmentService {
             return isOssStorage();
         }
         return "oss".equalsIgnoreCase(storageType);
+    }
+    
+    /**
+     * 判断附件是否使用COS存储（根据记录的存储类型）
+     */
+    private boolean isCosStorage(Attachment attachment) {
+        String storageType = attachment.getStorageType();
+        // 兼容历史数据：如果storageType为空，默认使用配置判断
+        if (storageType == null || storageType.isEmpty()) {
+            return isCosStorage();
+        }
+        return "cos".equalsIgnoreCase(storageType);
+    }
+    
+    /**
+     * 判断附件是否使用云存储（OSS或COS）
+     */
+    private boolean isCloudStorage(Attachment attachment) {
+        return isOssStorage(attachment) || isCosStorage(attachment);
+    }
+    
+    /**
+     * 从云存储下载文件到临时文件（通用方法）
+     */
+    private File downloadFromCloud(Attachment attachment, String cloudType) {
+        try {
+            String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+            InputStream inputStream;
+            
+            if ("oss".equals(cloudType)) {
+                inputStream = ossService.downloadFile(objectKey);
+            } else if ("cos".equals(cloudType)) {
+                inputStream = cosService.downloadFile(objectKey);
+            } else {
+                throw new BusinessException("不支持的云存储类型: " + cloudType);
+            }
+            
+            // 创建临时文件
+            File tempFile = File.createTempFile(cloudType + "_download_", "_" + attachment.getDiskFilename());
+            tempFile.deleteOnExit();
+            
+            // 将云存储文件流写入临时文件
+            try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    fos.write(buffer, 0, bytesRead);
+                }
+            } finally {
+                inputStream.close();
+            }
+            
+            return tempFile;
+        } catch (Exception e) {
+            log.error("从{}下载文件失败: attachmentId={}, error={}", cloudType.toUpperCase(), 
+                    attachment.getId(), e.getMessage(), e);
+            throw new BusinessException("下载文件失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -153,55 +219,26 @@ public class AttachmentService {
         // 3. 计算文件摘要
         String digest = calculateFileDigest(file);
 
-        // 4. 保存文件（根据存储类型选择本地或OSS）
+        // 4. 保存文件（根据存储类型选择本地、OSS或COS）
         String objectKey = diskDirectory + "/" + diskFilename;
         
         if (isOssStorage()) {
             // OSS存储
             try {
-                // 如果是图片文件，需要先处理（缩略图、水印）
-                InputStream uploadStream = file.getInputStream();
-                
-                if (isImageFile(file.getContentType(), originalFilename)) {
-                    // 先保存到临时文件进行处理
-                    File tempFile = File.createTempFile("upload_", "_" + diskFilename);
-                    try {
-                        file.transferTo(tempFile);
-                        
-                        // 处理图片（缩略图、水印）
-                        if (thumbnailEnabled) {
-                            try {
-                                generateThumbnailForOss(tempFile, diskDirectory, diskFilename);
-                            } catch (Exception e) {
-                                log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
-                            }
-                        }
-                        
-                        if (isWatermarkEnabled()) {
-                            try {
-                                addWatermark(tempFile);
-                            } catch (Exception e) {
-                                log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
-                            }
-                        }
-                        
-                        // 上传处理后的文件到OSS
-                        try (FileInputStream fis = new FileInputStream(tempFile)) {
-                            ossService.uploadFile(fis, objectKey, file.getContentType(), tempFile.length());
-                        }
-                    } finally {
-                        // 清理临时文件
-                        tempFile.delete();
-                    }
-                } else {
-                    // 非图片文件直接上传
-                    ossService.uploadFile(uploadStream, objectKey, file.getContentType(), file.getSize());
-                }
-                
+                uploadToOss(file, objectKey, originalFilename, diskDirectory, diskFilename);
                 log.debug("文件上传到OSS成功: objectKey={}", objectKey);
             } catch (Exception e) {
                 log.error("上传文件到OSS失败: objectKey={}, error={}", objectKey, e.getMessage(), e);
                 throw new BusinessException("上传文件到OSS失败: " + e.getMessage());
+            }
+        } else if (isCosStorage()) {
+            // COS存储
+            try {
+                uploadToCos(file, objectKey, originalFilename, diskDirectory, diskFilename);
+                log.debug("文件上传到COS成功: objectKey={}", objectKey);
+            } catch (Exception e) {
+                log.error("上传文件到COS失败: objectKey={}, error={}", objectKey, e.getMessage(), e);
+                throw new BusinessException("上传文件到COS失败: " + e.getMessage());
             }
         } else {
             // 本地存储
@@ -256,7 +293,8 @@ public class AttachmentService {
         attachment.setDescription(request.getDescription());
         attachment.setCreatedOn(LocalDateTime.now());
         // 记录存储类型（快照，避免配置变更后无法找到文件）
-        attachment.setStorageType(isOssStorage() ? "oss" : "local");
+        String storageType = getStorageType();
+        attachment.setStorageType(storageType != null ? storageType : "local");
 
         attachmentMapper.insert(attachment);
 
@@ -433,6 +471,16 @@ public class AttachmentService {
                     String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
                     ossService.deleteFile(thumbnailKey);
                 }
+            } else if (isCosStorage(attachment)) {
+                // COS存储
+                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
+                cosService.deleteFile(objectKey);
+                
+                // 如果存在缩略图，也删除
+                if (isImageFile(attachment.getContentType(), attachment.getFilename())) {
+                    String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
+                    cosService.deleteFile(thumbnailKey);
+                }
             } else {
                 // 本地存储
                 Path baseStoragePath = getStoragePath();
@@ -471,30 +519,10 @@ public class AttachmentService {
 
         if (isOssStorage(attachment)) {
             // OSS存储：下载到临时文件
-            try {
-                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
-                InputStream inputStream = ossService.downloadFile(objectKey);
-                
-                // 创建临时文件
-                File tempFile = File.createTempFile("oss_download_", "_" + attachment.getDiskFilename());
-                tempFile.deleteOnExit();
-                
-                // 将OSS文件流写入临时文件
-                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
-                    byte[] buffer = new byte[8192];
-                    int bytesRead;
-                    while ((bytesRead = inputStream.read(buffer)) != -1) {
-                        fos.write(buffer, 0, bytesRead);
-                    }
-                } finally {
-                    inputStream.close();
-                }
-                
-                return tempFile;
-            } catch (Exception e) {
-                log.error("从OSS下载文件失败: attachmentId={}, error={}", id, e.getMessage(), e);
-                throw new BusinessException("下载文件失败: " + e.getMessage());
-            }
+            return downloadFromCloud(attachment, "oss");
+        } else if (isCosStorage(attachment)) {
+            // COS存储：下载到临时文件
+            return downloadFromCloud(attachment, "cos");
         } else {
             // 本地存储
             Path baseStoragePath = getStoragePath();
@@ -561,31 +589,15 @@ public class AttachmentService {
                     
                     try {
                         // 根据存储类型获取文件流
-                        if (isOssStorage(attachment)) {
-                            // OSS存储：下载到临时文件
+                        if (isOssStorage(attachment) || isCosStorage(attachment)) {
+                            // 云存储（OSS或COS）：下载到临时文件
+                            String cloudType = isOssStorage(attachment) ? "oss" : "cos";
                             try {
-                                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
-                                InputStream ossStream = ossService.downloadFile(objectKey);
-                                
-                                // 创建临时文件
-                                tempFile = File.createTempFile("oss_batch_", "_" + attachment.getDiskFilename());
-                                tempFile.deleteOnExit();
-                                
-                                // 将OSS文件流写入临时文件
-                                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
-                                    byte[] tempBuffer = new byte[8192];
-                                    int bytesRead;
-                                    while ((bytesRead = ossStream.read(tempBuffer)) != -1) {
-                                        fos.write(tempBuffer, 0, bytesRead);
-                                    }
-                                } finally {
-                                    ossStream.close();
-                                }
-                                
+                                tempFile = downloadFromCloud(attachment, cloudType);
                                 fileInputStream = new FileInputStream(tempFile);
                             } catch (Exception e) {
-                                log.warn("从OSS下载文件失败，跳过: attachmentId={}, error={}", 
-                                        attachment.getId(), e.getMessage());
+                                log.warn("从{}下载文件失败，跳过: attachmentId={}, error={}", 
+                                        cloudType.toUpperCase(), attachment.getId(), e.getMessage());
                                 continue;
                             }
                         } else {
@@ -832,9 +844,99 @@ public class AttachmentService {
     }
 
     /**
-     * 为OSS存储生成缩略图
+     * 上传文件到OSS（处理图片的缩略图和水印）
      */
-    private void generateThumbnailForOss(File originalFile, String diskDirectory, String diskFilename) throws IOException {
+    private void uploadToOss(MultipartFile file, String objectKey, String originalFilename, 
+                            String diskDirectory, String diskFilename) throws Exception {
+        // 如果是图片文件，需要先处理（缩略图、水印）
+        InputStream uploadStream = file.getInputStream();
+        
+        if (isImageFile(file.getContentType(), originalFilename)) {
+            // 先保存到临时文件进行处理
+            File tempFile = File.createTempFile("upload_", "_" + diskFilename);
+            try {
+                file.transferTo(tempFile);
+                
+                // 处理图片（缩略图、水印）
+                if (thumbnailEnabled) {
+                    try {
+                        generateThumbnailForCloud(tempFile, diskDirectory, diskFilename, "oss");
+                    } catch (Exception e) {
+                        log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
+                    }
+                }
+                
+                if (isWatermarkEnabled()) {
+                    try {
+                        addWatermark(tempFile);
+                    } catch (Exception e) {
+                        log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
+                    }
+                }
+                
+                // 上传处理后的文件到OSS
+                try (FileInputStream fis = new FileInputStream(tempFile)) {
+                    ossService.uploadFile(fis, objectKey, file.getContentType(), tempFile.length());
+                }
+            } finally {
+                // 清理临时文件
+                tempFile.delete();
+            }
+        } else {
+            // 非图片文件直接上传
+            ossService.uploadFile(uploadStream, objectKey, file.getContentType(), file.getSize());
+        }
+    }
+    
+    /**
+     * 上传文件到COS（处理图片的缩略图和水印）
+     */
+    private void uploadToCos(MultipartFile file, String objectKey, String originalFilename, 
+                            String diskDirectory, String diskFilename) throws Exception {
+        // 如果是图片文件，需要先处理（缩略图、水印）
+        InputStream uploadStream = file.getInputStream();
+        
+        if (isImageFile(file.getContentType(), originalFilename)) {
+            // 先保存到临时文件进行处理
+            File tempFile = File.createTempFile("upload_", "_" + diskFilename);
+            try {
+                file.transferTo(tempFile);
+                
+                // 处理图片（缩略图、水印）
+                if (thumbnailEnabled) {
+                    try {
+                        generateThumbnailForCloud(tempFile, diskDirectory, diskFilename, "cos");
+                    } catch (Exception e) {
+                        log.warn("生成缩略图失败: filename={}, error={}", originalFilename, e.getMessage());
+                    }
+                }
+                
+                if (isWatermarkEnabled()) {
+                    try {
+                        addWatermark(tempFile);
+                    } catch (Exception e) {
+                        log.warn("添加水印失败: filename={}, error={}", originalFilename, e.getMessage());
+                    }
+                }
+                
+                // 上传处理后的文件到COS
+                try (FileInputStream fis = new FileInputStream(tempFile)) {
+                    cosService.uploadFile(fis, objectKey, file.getContentType(), tempFile.length());
+                }
+            } finally {
+                // 清理临时文件
+                tempFile.delete();
+            }
+        } else {
+            // 非图片文件直接上传
+            cosService.uploadFile(uploadStream, objectKey, file.getContentType(), file.getSize());
+        }
+    }
+    
+    /**
+     * 为云存储（OSS/COS）生成缩略图
+     */
+    private void generateThumbnailForCloud(File originalFile, String diskDirectory, String diskFilename, String cloudType) throws IOException {
         // 先保存到临时文件
         File tempThumbnail = File.createTempFile("thumb_", "_" + diskFilename);
         try {
@@ -867,13 +969,17 @@ public class AttachmentService {
                     .outputQuality(0.85f)
                     .toFile(tempThumbnail);
 
-            // 上传缩略图到OSS
+            // 上传缩略图到云存储
             String thumbnailKey = diskDirectory + "/thumb_" + diskFilename;
             try (FileInputStream fis = new FileInputStream(tempThumbnail)) {
-                ossService.uploadFile(fis, thumbnailKey, "image/jpeg", tempThumbnail.length());
+                if ("oss".equals(cloudType)) {
+                    ossService.uploadFile(fis, thumbnailKey, "image/jpeg", tempThumbnail.length());
+                } else if ("cos".equals(cloudType)) {
+                    cosService.uploadFile(fis, thumbnailKey, "image/jpeg", tempThumbnail.length());
+                }
             }
             
-            log.debug("OSS缩略图生成成功: {}", thumbnailKey);
+            log.debug("{}缩略图生成成功: {}", cloudType.toUpperCase(), thumbnailKey);
         } finally {
             tempThumbnail.delete();
         }
@@ -937,47 +1043,59 @@ public class AttachmentService {
             throw new BusinessException("该附件不是图片文件，无法生成缩略图");
         }
 
-        if (isOssStorage(attachment)) {
-            // OSS存储
+        if (isOssStorage(attachment) || isCosStorage(attachment)) {
+            // 云存储（OSS或COS）
+            String cloudType = isOssStorage(attachment) ? "oss" : "cos";
             String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
             
             // 检查缩略图是否存在
-            if (!ossService.fileExists(thumbnailKey)) {
+            boolean thumbnailExists;
+            if ("oss".equals(cloudType)) {
+                thumbnailExists = ossService.fileExists(thumbnailKey);
+            } else {
+                thumbnailExists = cosService.fileExists(thumbnailKey);
+            }
+            
+            if (!thumbnailExists) {
                 // 如果不存在，尝试生成
                 String originalKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
-                if (!ossService.fileExists(originalKey)) {
+                boolean originalExists;
+                if ("oss".equals(cloudType)) {
+                    originalExists = ossService.fileExists(originalKey);
+                } else {
+                    originalExists = cosService.fileExists(originalKey);
+                }
+                
+                if (!originalExists) {
                     throw new BusinessException("原文件不存在");
                 }
                 
                 // 下载原文件到临时文件
                 try {
-                    InputStream originalStream = ossService.downloadFile(originalKey);
-                    File tempOriginal = File.createTempFile("oss_original_", "_" + attachment.getDiskFilename());
+                    File tempOriginal = downloadFromCloud(attachment, cloudType);
                     tempOriginal.deleteOnExit();
                     
-                    try (FileOutputStream fos = new FileOutputStream(tempOriginal)) {
-                        byte[] buffer = new byte[8192];
-                        int bytesRead;
-                        while ((bytesRead = originalStream.read(buffer)) != -1) {
-                            fos.write(buffer, 0, bytesRead);
-                        }
-                    } finally {
-                        originalStream.close();
-                    }
-                    
-                    // 生成缩略图并上传到OSS
-                    generateThumbnailForOss(tempOriginal, attachment.getDiskDirectory(), attachment.getDiskFilename());
+                    // 生成缩略图并上传到云存储
+                    generateThumbnailForCloud(tempOriginal, attachment.getDiskDirectory(), 
+                            attachment.getDiskFilename(), cloudType);
                     tempOriginal.delete();
                 } catch (Exception e) {
-                    log.error("生成OSS缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                    log.error("生成{}缩略图失败: attachmentId={}, error={}", cloudType.toUpperCase(), 
+                            attachmentId, e.getMessage(), e);
                     throw new BusinessException("生成缩略图失败: " + e.getMessage());
                 }
             }
             
             // 下载缩略图到临时文件
             try {
-                InputStream thumbnailStream = ossService.downloadFile(thumbnailKey);
-                File tempThumbnail = File.createTempFile("oss_thumb_", "_" + attachment.getDiskFilename());
+                InputStream thumbnailStream;
+                if ("oss".equals(cloudType)) {
+                    thumbnailStream = ossService.downloadFile(thumbnailKey);
+                } else {
+                    thumbnailStream = cosService.downloadFile(thumbnailKey);
+                }
+                
+                File tempThumbnail = File.createTempFile(cloudType + "_thumb_", "_" + attachment.getDiskFilename());
                 tempThumbnail.deleteOnExit();
                 
                 try (FileOutputStream fos = new FileOutputStream(tempThumbnail)) {
@@ -992,7 +1110,8 @@ public class AttachmentService {
                 
                 return tempThumbnail;
             } catch (Exception e) {
-                log.error("从OSS下载缩略图失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
+                log.error("从{}下载缩略图失败: attachmentId={}, error={}", cloudType.toUpperCase(), 
+                        attachmentId, e.getMessage(), e);
                 throw new BusinessException("获取缩略图失败: " + e.getMessage());
             }
         } else {
@@ -1069,30 +1188,10 @@ public class AttachmentService {
             throw new BusinessException("该文件类型不支持预览");
         }
 
-        if (isOssStorage(attachment)) {
-            // OSS存储：下载到临时文件
-            try {
-                String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
-                InputStream inputStream = ossService.downloadFile(objectKey);
-                
-                File tempFile = File.createTempFile("oss_preview_", "_" + attachment.getDiskFilename());
-                tempFile.deleteOnExit();
-                
-                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
-                    byte[] buffer = new byte[8192];
-                    int bytesRead;
-                    while ((bytesRead = inputStream.read(buffer)) != -1) {
-                        fos.write(buffer, 0, bytesRead);
-                    }
-                } finally {
-                    inputStream.close();
-                }
-                
-                return tempFile;
-            } catch (Exception e) {
-                log.error("从OSS下载预览文件失败: attachmentId={}, error={}", attachmentId, e.getMessage(), e);
-                throw new BusinessException("获取预览文件失败: " + e.getMessage());
-            }
+        if (isOssStorage(attachment) || isCosStorage(attachment)) {
+            // 云存储（OSS或COS）：下载到临时文件
+            String cloudType = isOssStorage(attachment) ? "oss" : "cos";
+            return downloadFromCloud(attachment, cloudType);
         } else {
             // 本地存储
             Path baseStoragePath = getStoragePath();

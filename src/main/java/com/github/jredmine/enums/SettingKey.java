@@ -131,7 +131,7 @@ public enum SettingKey {
     THUMBNAIL_ENABLED("thumbnails_enabled", "缩略图启用", "true", SettingCategory.ATTACHMENT),
     
     /**
-     * 存储类型（local/oss）
+     * 存储类型（local/oss/cos）
      */
     ATTACHMENT_STORAGE_TYPE("attachment_storage_type", "存储类型", "local", SettingCategory.ATTACHMENT),
     
@@ -159,6 +159,31 @@ public enum SettingKey {
      * OSS 存储路径前缀
      */
     OSS_PATH_PREFIX("oss_path_prefix", "OSS路径前缀", "attachments", SettingCategory.ATTACHMENT),
+    
+    /**
+     * COS Region（地域）
+     */
+    COS_REGION("cos_region", "COS Region", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * COS SecretId
+     */
+    COS_SECRET_ID("cos_secret_id", "COS SecretId", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * COS SecretKey
+     */
+    COS_SECRET_KEY("cos_secret_key", "COS SecretKey", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * COS Bucket名称
+     */
+    COS_BUCKET_NAME("cos_bucket_name", "COS Bucket名称", "", SettingCategory.ATTACHMENT),
+    
+    /**
+     * COS 存储路径前缀
+     */
+    COS_PATH_PREFIX("cos_path_prefix", "COS路径前缀", "attachments", SettingCategory.ATTACHMENT),
     
     /**
      * 水印是否启用
