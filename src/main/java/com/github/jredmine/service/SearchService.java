@@ -1,7 +1,6 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.search.GlobalSearchRequestDTO;
 import com.github.jredmine.dto.response.search.GlobalSearchResponseDTO;
 import com.github.jredmine.dto.response.search.SearchResultItemDTO;
@@ -11,6 +10,7 @@ import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.mapper.wiki.WikiPageMapper;
 import com.github.jredmine.mapper.wiki.WikiContentMapper;
+import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,7 +34,8 @@ public class SearchService {
     private final UserMapper userMapper;
     private final WikiPageMapper wikiPageMapper;
     private final WikiContentMapper wikiContentMapper;
-    private final ProjectService projectService;
+    private final SearchHistoryService searchHistoryService;
+    private final SecurityUtils securityUtils;
 
     /**
      * 全局搜索
@@ -108,6 +109,9 @@ public class SearchService {
         // 按类型分组（用于展示分类标签）
         Map<String, List<SearchResultItemDTO>> groupedResults = pagedResults.stream()
                 .collect(Collectors.groupingBy(SearchResultItemDTO::getType));
+
+        // 记录搜索历史
+        recordSearchHistory(requestDTO, total);
 
         return GlobalSearchResponseDTO.builder()
                 .keyword(requestDTO.getKeyword())
@@ -434,6 +438,55 @@ public class SearchService {
             case 9: return "已归档";
             default: return "未知";
         }
+    }
+
+    /**
+     * 记录搜索历史
+     */
+    private void recordSearchHistory(GlobalSearchRequestDTO requestDTO, Long totalCount) {
+        try {
+            Long currentUserId = securityUtils.getCurrentUserId();
+            if (currentUserId != null && StringUtils.hasText(requestDTO.getKeyword())) {
+                searchHistoryService.recordSearchHistory(
+                    currentUserId,
+                    requestDTO.getKeyword(),
+                    requestDTO.getTypes(),
+                    requestDTO.getProjectId(),
+                    totalCount
+                );
+            }
+        } catch (Exception e) {
+            log.warn("记录搜索历史失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 获取搜索建议
+     */
+    public List<String> getSearchSuggestions(String prefix, Integer limit) {
+        return searchHistoryService.getSearchSuggestions(prefix, limit);
+    }
+
+    /**
+     * 获取用户搜索历史
+     */
+    public List<SearchHistory> getUserSearchHistories(Integer limit) {
+        try {
+            Long currentUserId = securityUtils.getCurrentUserId();
+            if (currentUserId != null) {
+                return searchHistoryService.getUserHistories(currentUserId, limit);
+            }
+        } catch (Exception e) {
+            log.warn("获取用户搜索历史失败: {}", e.getMessage());
+        }
+        return new ArrayList<>();
+    }
+
+    /**
+     * 获取热门搜索关键词
+     */
+    public List<String> getHotKeywords(Integer limit) {
+        return searchHistoryService.getHotKeywords(limit);
     }
 
     /**
