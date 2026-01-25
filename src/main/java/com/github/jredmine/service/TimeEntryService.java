@@ -480,7 +480,7 @@ public class TimeEntryService {
                 
                 // 5. 更新活动类型
                 if (item.getActivityId() != null) {
-                    com.github.jredmine.entity.Enumeration activity = enumerationMapper.selectById(item.getActivityId());
+                    Enumeration activity = enumerationMapper.selectById(item.getActivityId());
                     if (activity == null || !"TimeEntryActivity".equals(activity.getType())) {
                         failures.add(TimeEntryBatchUpdateResponseDTO.FailureDetail.builder()
                                 .timeEntryId(item.getId())

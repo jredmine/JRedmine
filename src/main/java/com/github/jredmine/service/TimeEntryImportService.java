@@ -3,6 +3,8 @@ package com.github.jredmine.service;
 import com.github.jredmine.dto.request.timeentry.TimeEntryBatchImportRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryCreateRequestDTO;
 import com.github.jredmine.dto.response.timeentry.TimeEntryBatchImportResponseDTO;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.github.jredmine.entity.Enumeration;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.exception.BusinessException;
@@ -314,7 +316,7 @@ public class TimeEntryImportService {
         } catch (NumberFormatException e) {
             // 作为项目标识查询
             Project project = projectMapper.selectOne(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Project>()
+                    new LambdaQueryWrapper<Project>()
                             .eq(Project::getIdentifier, projectStr.trim())
             );
             
@@ -340,7 +342,7 @@ public class TimeEntryImportService {
         } catch (NumberFormatException e) {
             // 作为登录名查询
             User user = userMapper.selectOne(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
+                    new LambdaQueryWrapper<User>()
                             .eq(User::getLogin, userStr.trim())
             );
             
@@ -365,10 +367,10 @@ public class TimeEntryImportService {
             return Long.parseLong(activityStr.trim());
         } catch (NumberFormatException e) {
             // 作为活动类型名称查询
-            com.github.jredmine.entity.Enumeration enumeration = enumerationMapper.selectOne(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.github.jredmine.entity.Enumeration>()
-                            .eq(com.github.jredmine.entity.Enumeration::getName, activityStr.trim())
-                            .eq(com.github.jredmine.entity.Enumeration::getType, "TimeEntryActivity")
+            Enumeration enumeration = enumerationMapper.selectOne(
+                    new LambdaQueryWrapper<Enumeration>()
+                            .eq(Enumeration::getName, activityStr.trim())
+                            .eq(Enumeration::getType, "TimeEntryActivity")
             );
             
             if (enumeration == null) {

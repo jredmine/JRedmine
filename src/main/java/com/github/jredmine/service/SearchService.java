@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.search.GlobalSearchRequestDTO;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.search.GlobalSearchResponseDTO;
 import com.github.jredmine.dto.response.search.SearchResultItemDTO;
 import com.github.jredmine.entity.*;
@@ -117,7 +118,7 @@ public class SearchService {
                 .keyword(requestDTO.getKeyword())
                 .totalCount(total)
                 .typeCounts(typeCounts)
-                .results(com.github.jredmine.dto.response.PageResponse.of(
+                .results(PageResponse.of(
                         pagedResults, total, (long) pageNum, (long) pageSize))
                 .groupedResults(groupedResults)
                 .build();
@@ -502,7 +503,7 @@ public class SearchService {
                 .keyword(keyword)
                 .totalCount(0L)
                 .typeCounts(typeCounts)
-                .results(com.github.jredmine.dto.response.PageResponse.of(
+                .results(PageResponse.of(
                         new ArrayList<>(), 0L, 1L, 20L))
                 .groupedResults(new HashMap<>())
                 .build();

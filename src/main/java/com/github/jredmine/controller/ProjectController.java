@@ -26,6 +26,9 @@ import com.github.jredmine.dto.response.project.ProjectMemberResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
+import com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
+import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -373,21 +376,21 @@ public class ProjectController {
     @Operation(summary = "获取版本统计", description = "获取版本统计信息，包括任务数量、完成度、工时统计等。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
     @GetMapping("/{projectId}/versions/{id}/statistics")
-    public ApiResponse<com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO> getVersionStatistics(
+    public ApiResponse<VersionStatisticsResponseDTO> getVersionStatistics(
             @PathVariable Long projectId,
             @PathVariable Integer id) {
-        com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO result = projectService.getVersionStatistics(projectId, id);
+        VersionStatisticsResponseDTO result = projectService.getVersionStatistics(projectId, id);
         return ApiResponse.success(result);
     }
 
     @Operation(summary = "获取版本关联任务列表", description = "获取指定版本关联的所有任务列表，支持多种筛选条件和分页。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_issues')")
     @GetMapping("/{projectId}/versions/{id}/issues")
-    public ApiResponse<com.github.jredmine.dto.response.PageResponse<com.github.jredmine.dto.response.issue.IssueListItemResponseDTO>> getVersionIssues(
+    public ApiResponse<PageResponse<IssueListItemResponseDTO>> getVersionIssues(
             @PathVariable Long projectId,
             @PathVariable Integer id,
-            com.github.jredmine.dto.request.project.VersionIssuesRequestDTO requestDTO) {
-        com.github.jredmine.dto.response.PageResponse<com.github.jredmine.dto.response.issue.IssueListItemResponseDTO> result = projectService.getVersionIssues(projectId, id, requestDTO);
+            VersionIssuesRequestDTO requestDTO) {
+        PageResponse<IssueListItemResponseDTO> result = projectService.getVersionIssues(projectId, id, requestDTO);
         return ApiResponse.success(result);
     }
 }
