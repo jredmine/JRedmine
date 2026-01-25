@@ -369,4 +369,14 @@ public class ProjectController {
         projectService.deleteVersion(projectId, id);
         return ApiResponse.success("版本删除成功", null);
     }
+
+    @Operation(summary = "获取版本统计", description = "获取版本统计信息，包括任务数量、完成度、工时统计等。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
+    @GetMapping("/{projectId}/versions/{id}/statistics")
+    public ApiResponse<com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO> getVersionStatistics(
+            @PathVariable Long projectId,
+            @PathVariable Integer id) {
+        com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO result = projectService.getVersionStatistics(projectId, id);
+        return ApiResponse.success(result);
+    }
 }

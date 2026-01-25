@@ -27,6 +27,7 @@ import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.project.VersionResponseDTO;
+import com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Member;
@@ -47,6 +48,10 @@ import com.github.jredmine.enums.VersionStatus;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
+import com.github.jredmine.mapper.TimeEntryMapper;
+import com.github.jredmine.mapper.workflow.IssueStatusMapper;
+import com.github.jredmine.entity.IssueStatus;
+import com.github.jredmine.entity.TimeEntry;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
@@ -65,7 +70,9 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -93,6 +100,8 @@ public class ProjectService {
     private final MemberRoleMapper memberRoleMapper;
     private final VersionMapper versionMapper;
     private final IssueMapper issueMapper;
+    private final TimeEntryMapper timeEntryMapper;
+    private final IssueStatusMapper issueStatusMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final IssueService issueService;
@@ -3122,5 +3131,185 @@ public class ProjectService {
         dto.setIssueCount(issueCount.intValue());
 
         return dto;
+    }
+
+    /**
+     * 获取版本统计信息
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @return 版本统计信息
+     */
+    public VersionStatisticsResponseDTO getVersionStatistics(Long projectId, Integer versionId) {
+        MDC.put("operation", "get_version_statistics");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始查询版本统计，项目ID: {}, 版本ID: {}", projectId, versionId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 查询版本关联的所有任务
+            LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+            issueQuery.eq(Issue::getFixedVersionId, versionId.longValue())
+                     .eq(Issue::getProjectId, projectId);
+            List<Issue> issues = issueMapper.selectList(issueQuery);
+
+            // 统计任务数量
+            long totalIssues = issues.size();
+            
+            // 获取所有状态信息（用于状态名称映射）
+            List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
+            Map<Integer, String> statusMap = allStatuses.stream()
+                    .collect(Collectors.toMap(IssueStatus::getId, IssueStatus::getName));
+
+            // 按状态统计任务
+            Map<String, Long> issuesByStatus = new HashMap<>();
+            long completedIssues = 0;
+            long inProgressIssues = 0;
+            long pendingIssues = 0;
+            long closedIssues = 0;
+            
+            for (Issue issue : issues) {
+                String statusName = statusMap.getOrDefault(issue.getStatusId(), "未知");
+                issuesByStatus.merge(statusName, 1L, Long::sum);
+                
+                // 判断任务状态分类
+                if (issue.getDoneRatio() != null && issue.getDoneRatio() >= 100) {
+                    completedIssues++;
+                } else if (issue.getDoneRatio() != null && issue.getDoneRatio() > 0) {
+                    inProgressIssues++;
+                } else {
+                    pendingIssues++;
+                }
+                
+                // 检查是否为关闭状态（通常状态ID对应关闭状态）
+                IssueStatus status = allStatuses.stream()
+                        .filter(s -> s.getId().equals(issue.getStatusId()))
+                        .findFirst()
+                        .orElse(null);
+                if (status != null && status.getIsClosed() != null && status.getIsClosed()) {
+                    closedIssues++;
+                }
+            }
+
+            // 计算版本完成度（基于任务完成度）
+            double totalDoneRatio = issues.stream()
+                    .filter(i -> i.getDoneRatio() != null)
+                    .mapToInt(Issue::getDoneRatio)
+                    .sum();
+            double completionPercentage = totalIssues > 0 ? totalDoneRatio / totalIssues : 0.0;
+
+            // 工时统计
+            double estimatedHours = issues.stream()
+                    .filter(i -> i.getEstimatedHours() != null)
+                    .mapToDouble(Issue::getEstimatedHours)
+                    .sum();
+
+            // 查询已消耗工时（通过time_entries表）
+            double spentHours = 0.0;
+            if (!issues.isEmpty()) {
+                List<Long> issueIds = issues.stream().map(Issue::getId).collect(Collectors.toList());
+                LambdaQueryWrapper<TimeEntry> timeEntryQuery = new LambdaQueryWrapper<>();
+                timeEntryQuery.eq(TimeEntry::getProjectId, projectId)
+                             .in(TimeEntry::getIssueId, issueIds)
+                             .isNotNull(TimeEntry::getHours);
+                List<TimeEntry> timeEntries = timeEntryMapper.selectList(timeEntryQuery);
+                
+                spentHours = timeEntries.stream()
+                        .filter(te -> te.getHours() != null)
+                        .mapToDouble(TimeEntry::getHours)
+                        .sum();
+            }
+            
+            double remainingHours = Math.max(0, estimatedHours - spentHours);
+            double hoursCompletionPercentage = estimatedHours > 0 
+                    ? (spentHours / estimatedHours) * 100 
+                    : 0.0;
+
+            // 时间统计
+            LocalDate earliestStartDate = issues.stream()
+                    .filter(i -> i.getStartDate() != null)
+                    .map(Issue::getStartDate)
+                    .min(LocalDate::compareTo)
+                    .orElse(null);
+
+            LocalDate latestDueDate = issues.stream()
+                    .filter(i -> i.getDueDate() != null)
+                    .map(Issue::getDueDate)
+                    .max(LocalDate::compareTo)
+                    .orElse(null);
+
+            // 预计完成时间（使用版本生效日期或最晚截止日期）
+            LocalDate estimatedCompletionDate = version.getEffectiveDate() != null 
+                    ? version.getEffectiveDate() 
+                    : latestDueDate;
+
+            // 按跟踪器统计
+            Map<String, Long> issuesByTracker = issues.stream()
+                    .collect(Collectors.groupingBy(
+                        issue -> {
+                            Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+                            return tracker != null ? tracker.getName() : "未知";
+                        },
+                        Collectors.counting()
+                    ));
+
+            // 按优先级统计（需要获取优先级名称）
+            Map<String, Long> issuesByPriority = issues.stream()
+                    .collect(Collectors.groupingBy(
+                        issue -> "优先级" + issue.getPriorityId(),
+                        Collectors.counting()
+                    ));
+
+            log.info("版本统计查询成功，版本ID: {}, 任务总数: {}", versionId, totalIssues);
+
+            return VersionStatisticsResponseDTO.builder()
+                    .versionId(versionId)
+                    .versionName(version.getName())
+                    .versionStatus(version.getStatus())
+                    .effectiveDate(version.getEffectiveDate())
+                    .totalIssues(totalIssues)
+                    .completedIssues(completedIssues)
+                    .inProgressIssues(inProgressIssues)
+                    .pendingIssues(pendingIssues)
+                    .closedIssues(closedIssues)
+                    .completionPercentage(Math.round(completionPercentage * 100.0) / 100.0)
+                    .estimatedHours(Math.round(estimatedHours * 100.0) / 100.0)
+                    .spentHours(Math.round(spentHours * 100.0) / 100.0)
+                    .remainingHours(Math.round(remainingHours * 100.0) / 100.0)
+                    .hoursCompletionPercentage(Math.round(hoursCompletionPercentage * 100.0) / 100.0)
+                    .earliestStartDate(earliestStartDate)
+                    .latestDueDate(latestDueDate)
+                    .estimatedCompletionDate(estimatedCompletionDate)
+                    .issuesByStatus(issuesByStatus)
+                    .issuesByTracker(issuesByTracker)
+                    .issuesByPriority(issuesByPriority)
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
     }
 }
