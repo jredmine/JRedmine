@@ -17,6 +17,7 @@ import com.github.jredmine.dto.request.project.ProjectUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionCreateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionListRequestDTO;
 import com.github.jredmine.dto.request.project.VersionUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -28,6 +29,7 @@ import com.github.jredmine.dto.response.project.ProjectTemplateResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.project.VersionResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO;
+import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.EmailAddress;
 import com.github.jredmine.entity.Member;
@@ -50,8 +52,10 @@ import com.github.jredmine.mapper.TrackerMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.TimeEntryMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
+import com.github.jredmine.mapper.workflow.EnumerationMapper;
 import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.TimeEntry;
+import com.github.jredmine.entity.Enumeration;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
@@ -102,6 +106,7 @@ public class ProjectService {
     private final IssueMapper issueMapper;
     private final TimeEntryMapper timeEntryMapper;
     private final IssueStatusMapper issueStatusMapper;
+    private final EnumerationMapper enumerationMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final IssueService issueService;
@@ -3311,5 +3316,281 @@ public class ProjectService {
             MDC.remove("projectId");
             MDC.remove("versionId");
         }
+    }
+
+    /**
+     * 获取版本关联的任务列表
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @param requestDTO 查询请求
+     * @return 任务列表
+     */
+    public PageResponse<IssueListItemResponseDTO> getVersionIssues(Long projectId, Integer versionId, VersionIssuesRequestDTO requestDTO) {
+        MDC.put("operation", "get_version_issues");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始查询版本关联任务，项目ID: {}, 版本ID: {}", projectId, versionId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 构建查询条件
+            LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
+            
+            // 固定版本ID和项目ID
+            queryWrapper.eq(Issue::getFixedVersionId, versionId.longValue())
+                       .eq(Issue::getProjectId, projectId);
+
+            // 状态筛选
+            if (requestDTO.getStatusId() != null && requestDTO.getStatusId() > 0) {
+                queryWrapper.eq(Issue::getStatusId, requestDTO.getStatusId());
+            }
+
+            // 跟踪器筛选
+            if (requestDTO.getTrackerId() != null && requestDTO.getTrackerId() > 0) {
+                queryWrapper.eq(Issue::getTrackerId, requestDTO.getTrackerId());
+            }
+
+            // 优先级筛选
+            if (requestDTO.getPriorityId() != null && requestDTO.getPriorityId() > 0) {
+                queryWrapper.eq(Issue::getPriorityId, requestDTO.getPriorityId());
+            }
+
+            // 指派人筛选
+            if (requestDTO.getAssignedToId() != null) {
+                if (requestDTO.getAssignedToId() == 0) {
+                    queryWrapper.isNull(Issue::getAssignedToId);
+                } else {
+                    queryWrapper.eq(Issue::getAssignedToId, requestDTO.getAssignedToId());
+                }
+            }
+
+            // 创建者筛选
+            if (requestDTO.getAuthorId() != null && requestDTO.getAuthorId() > 0) {
+                queryWrapper.eq(Issue::getAuthorId, requestDTO.getAuthorId());
+            }
+
+            // 分类筛选
+            if (requestDTO.getCategoryId() != null) {
+                if (requestDTO.getCategoryId() == 0) {
+                    queryWrapper.isNull(Issue::getCategoryId);
+                } else {
+                    queryWrapper.eq(Issue::getCategoryId, requestDTO.getCategoryId());
+                }
+            }
+
+            // 关键词搜索
+            if (requestDTO.getKeyword() != null && !requestDTO.getKeyword().trim().isEmpty()) {
+                queryWrapper.and(wrapper -> {
+                    wrapper.like(Issue::getSubject, requestDTO.getKeyword().trim())
+                           .or()
+                           .like(Issue::getDescription, requestDTO.getKeyword().trim());
+                });
+            }
+
+            // 是否私有筛选
+            if (requestDTO.getIsPrivate() != null) {
+                queryWrapper.eq(Issue::getIsPrivate, requestDTO.getIsPrivate());
+            }
+
+            // 权限过滤：如果不是管理员，只显示用户有权限查看的任务
+            if (!isAdmin) {
+                // 检查用户是否有项目权限
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "view_issues")) {
+                    log.warn("用户无权限查看任务，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限查看任务");
+                }
+            }
+
+            // 排序处理
+            String sortOrder = requestDTO.getSortOrder() != null ? requestDTO.getSortOrder() : "desc";
+            if (requestDTO.getSortBy() != null && !requestDTO.getSortBy().trim().isEmpty()) {
+                String sortField = requestDTO.getSortBy().trim().toLowerCase();
+                boolean ascending = "asc".equalsIgnoreCase(sortOrder);
+                switch (sortField) {
+                    case "created_on":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getCreatedOn);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getCreatedOn);
+                        }
+                        break;
+                    case "updated_on":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getUpdatedOn);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getUpdatedOn);
+                        }
+                        break;
+                    case "priority":
+                    case "priority_id":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getPriorityId);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getPriorityId);
+                        }
+                        break;
+                    case "due_date":
+                        if (ascending) {
+                            queryWrapper.orderByAsc(Issue::getDueDate);
+                        } else {
+                            queryWrapper.orderByDesc(Issue::getDueDate);
+                        }
+                        break;
+                    default:
+                        queryWrapper.orderByDesc(Issue::getId);
+                        break;
+                }
+            } else {
+                queryWrapper.orderByDesc(Issue::getId);
+            }
+
+            // 分页查询
+            Page<Issue> page = new Page<>(requestDTO.getCurrent(), requestDTO.getSize());
+            Page<Issue> result = issueMapper.selectPage(page, queryWrapper);
+
+            // 转换为响应DTO
+            List<IssueListItemResponseDTO> dtoList = result.getRecords().stream()
+                    .map(this::convertToIssueListItemResponseDTO)
+                    .collect(Collectors.toList());
+
+            log.info("版本关联任务查询成功，版本ID: {}, 任务总数: {}", versionId, result.getTotal());
+
+            return PageResponse.of(
+                    dtoList,
+                    result.getTotal(),
+                    result.getCurrent(),
+                    result.getSize());
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 转换为任务列表项响应DTO
+     */
+    private IssueListItemResponseDTO convertToIssueListItemResponseDTO(Issue issue) {
+        IssueListItemResponseDTO dto = new IssueListItemResponseDTO();
+        dto.setId(issue.getId());
+        dto.setTrackerId(issue.getTrackerId());
+        dto.setProjectId(issue.getProjectId());
+        dto.setSubject(issue.getSubject());
+        dto.setStatusId(issue.getStatusId());
+        dto.setPriorityId(issue.getPriorityId());
+        dto.setAssignedToId(issue.getAssignedToId());
+        dto.setAuthorId(issue.getAuthorId());
+        dto.setDoneRatio(issue.getDoneRatio());
+        dto.setDueDate(issue.getDueDate());
+        dto.setIsPrivate(issue.getIsPrivate());
+        dto.setCreatedOn(issue.getCreatedOn());
+        dto.setUpdatedOn(issue.getUpdatedOn());
+
+        // 获取跟踪器名称
+        if (issue.getTrackerId() != null) {
+            Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+            dto.setTrackerName(tracker != null ? tracker.getName() : null);
+        }
+
+        // 获取项目名称
+        if (issue.getProjectId() != null) {
+            Project project = projectMapper.selectById(issue.getProjectId());
+            dto.setProjectName(project != null ? project.getName() : null);
+        }
+
+        // 获取状态名称
+        if (issue.getStatusId() != null) {
+            IssueStatus status = issueStatusMapper.selectById(issue.getStatusId());
+            dto.setStatusName(status != null ? status.getName() : null);
+        }
+
+        // 获取指派人信息
+        if (issue.getAssignedToId() != null) {
+            User assignedUser = userMapper.selectById(issue.getAssignedToId());
+            if (assignedUser != null) {
+                dto.setAssignedToName(getUserDisplayName(assignedUser));
+            }
+        }
+
+        // 获取创建者信息
+        if (issue.getAuthorId() != null) {
+            User author = userMapper.selectById(issue.getAuthorId());
+            if (author != null) {
+                dto.setAuthorName(getUserDisplayName(author));
+            }
+        }
+
+        // 获取优先级名称
+        if (issue.getPriorityId() != null) {
+            String priorityName = getPriorityName(issue.getPriorityId());
+            dto.setPriorityName(priorityName);
+        }
+
+        return dto;
+    }
+
+    /**
+     * 获取优先级名称
+     */
+    private String getPriorityName(Integer priorityId) {
+        if (priorityId == null || priorityId == 0) {
+            return null;
+        }
+
+        try {
+            LambdaQueryWrapper<Enumeration> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Enumeration::getId, priorityId)
+                       .eq(Enumeration::getType, "IssuePriority")
+                       .eq(Enumeration::getActive, true);
+            Enumeration enumeration = enumerationMapper.selectOne(queryWrapper);
+
+            return enumeration != null ? enumeration.getName() : null;
+        } catch (Exception e) {
+            log.warn("查询优先级名称失败，优先级ID: {}", priorityId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 获取用户显示名称
+     */
+    private String getUserDisplayName(User user) {
+        if (user == null) {
+            return null;
+        }
+        if ((user.getFirstname() != null && !user.getFirstname().isEmpty()) ||
+            (user.getLastname() != null && !user.getLastname().isEmpty())) {
+            return (user.getFirstname() != null ? user.getFirstname() : "") +
+                   " " +
+                   (user.getLastname() != null ? user.getLastname() : "");
+        }
+        return user.getLogin();
     }
 }

@@ -379,4 +379,15 @@ public class ProjectController {
         com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO result = projectService.getVersionStatistics(projectId, id);
         return ApiResponse.success(result);
     }
+
+    @Operation(summary = "获取版本关联任务列表", description = "获取指定版本关联的所有任务列表，支持多种筛选条件和分页。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_issues')")
+    @GetMapping("/{projectId}/versions/{id}/issues")
+    public ApiResponse<com.github.jredmine.dto.response.PageResponse<com.github.jredmine.dto.response.issue.IssueListItemResponseDTO>> getVersionIssues(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            com.github.jredmine.dto.request.project.VersionIssuesRequestDTO requestDTO) {
+        com.github.jredmine.dto.response.PageResponse<com.github.jredmine.dto.response.issue.IssueListItemResponseDTO> result = projectService.getVersionIssues(projectId, id, requestDTO);
+        return ApiResponse.success(result);
+    }
 }
