@@ -30,7 +30,9 @@ import com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
+import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
+import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -405,5 +407,16 @@ public class ProjectController {
             @Valid @RequestBody VersionIssuesBatchAssignRequestDTO requestDTO) {
         VersionIssuesBatchAssignResponseDTO result = projectService.batchAssignIssuesToVersion(projectId, id, requestDTO);
         return ApiResponse.success("批量关联任务完成", result);
+    }
+
+    @Operation(summary = "批量取消任务与版本关联", description = "批量取消任务与指定版本的关联。需要认证，需要 manage_versions 和 edit_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or (hasPermission(#projectId, 'Project', 'manage_versions') and hasPermission(#projectId, 'Project', 'edit_issues'))")
+    @DeleteMapping("/{projectId}/versions/{id}/issues")
+    public ApiResponse<VersionIssuesBatchUnassignResponseDTO> batchUnassignIssuesFromVersion(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody VersionIssuesBatchUnassignRequestDTO requestDTO) {
+        VersionIssuesBatchUnassignResponseDTO result = projectService.batchUnassignIssuesFromVersion(projectId, id, requestDTO);
+        return ApiResponse.success("批量取消关联完成", result);
     }
 }
