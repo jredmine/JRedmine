@@ -29,6 +29,8 @@ import com.github.jredmine.dto.response.project.ProjectTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
+import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
+import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -392,5 +394,16 @@ public class ProjectController {
             VersionIssuesRequestDTO requestDTO) {
         PageResponse<IssueListItemResponseDTO> result = projectService.getVersionIssues(projectId, id, requestDTO);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "批量关联任务到版本", description = "批量将任务关联到指定版本。需要认证，需要 manage_versions 和 edit_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or (hasPermission(#projectId, 'Project', 'manage_versions') and hasPermission(#projectId, 'Project', 'edit_issues'))")
+    @PostMapping("/{projectId}/versions/{id}/issues")
+    public ApiResponse<VersionIssuesBatchAssignResponseDTO> batchAssignIssuesToVersion(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody VersionIssuesBatchAssignRequestDTO requestDTO) {
+        VersionIssuesBatchAssignResponseDTO result = projectService.batchAssignIssuesToVersion(projectId, id, requestDTO);
+        return ApiResponse.success("批量关联任务完成", result);
     }
 }

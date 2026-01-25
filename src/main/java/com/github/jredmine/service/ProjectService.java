@@ -18,6 +18,8 @@ import com.github.jredmine.dto.request.project.VersionCreateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionListRequestDTO;
 import com.github.jredmine.dto.request.project.VersionUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
+import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
+import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -75,6 +77,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -3592,5 +3595,148 @@ public class ProjectService {
                    (user.getLastname() != null ? user.getLastname() : "");
         }
         return user.getLogin();
+    }
+
+    /**
+     * 批量关联任务到版本
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @param requestDTO 批量关联请求
+     * @return 批量关联结果
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionIssuesBatchAssignResponseDTO batchAssignIssuesToVersion(
+            Long projectId, Integer versionId, VersionIssuesBatchAssignRequestDTO requestDTO) {
+        MDC.put("operation", "batch_assign_issues_to_version");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始批量关联任务到版本，项目ID: {}, 版本ID: {}, 任务数量: {}", 
+                    projectId, versionId, requestDTO.getIssueIds().size());
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 获取当前用户信息
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            boolean isAdmin = Boolean.TRUE.equals(currentUser.getAdmin());
+
+            // 权限验证：需要 manage_versions 权限或系统管理员
+            if (!isAdmin) {
+                if (!projectPermissionService.hasPermission(currentUserId, projectId, "manage_versions")) {
+                    log.warn("用户无权限管理版本，项目ID: {}, 用户ID: {}", projectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限管理版本，需要 manage_versions 权限");
+                }
+            }
+
+            // 查询所有任务
+            List<Long> issueIds = requestDTO.getIssueIds();
+            List<Issue> issues = issueMapper.selectBatchIds(issueIds);
+
+            if (issues.isEmpty()) {
+                log.warn("未找到任何任务，任务ID列表: {}", issueIds);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "未找到任何任务");
+            }
+
+            // 验证任务是否属于该项目，并检查编辑权限
+            List<Long> successIssueIds = new ArrayList<>();
+            List<Long> failIssueIds = new ArrayList<>();
+            Map<Long, String> errors = new HashMap<>();
+            int successCount = 0;
+
+            for (Issue issue : issues) {
+                Long issueId = issue.getId();
+                
+                try {
+                    // 验证任务是否属于该项目
+                    if (!issue.getProjectId().equals(projectId)) {
+                        String errorMsg = "任务不属于该项目";
+                        failIssueIds.add(issueId);
+                        errors.put(issueId, errorMsg);
+                        log.warn("任务不属于该项目，任务ID: {}, 任务项目ID: {}, 请求项目ID: {}", 
+                                issueId, issue.getProjectId(), projectId);
+                        continue;
+                    }
+
+                    // 权限验证：需要 edit_issues 权限或系统管理员
+                    if (!isAdmin) {
+                        if (!projectPermissionService.hasPermission(currentUserId, projectId, "edit_issues")) {
+                            String errorMsg = "无权限编辑任务";
+                            failIssueIds.add(issueId);
+                            errors.put(issueId, errorMsg);
+                            log.warn("用户无权限编辑任务，任务ID: {}, 项目ID: {}, 用户ID: {}", 
+                                    issueId, projectId, currentUserId);
+                            continue;
+                        }
+                    }
+
+                    // 更新任务的fixed_version_id
+                    issue.setFixedVersionId(versionId.longValue());
+                    issue.setUpdatedOn(java.time.LocalDateTime.now());
+                    
+                    int updateResult = issueMapper.updateById(issue);
+                    if (updateResult > 0) {
+                        successIssueIds.add(issueId);
+                        successCount++;
+                        log.debug("任务关联版本成功，任务ID: {}, 版本ID: {}", issueId, versionId);
+                    } else {
+                        String errorMsg = "更新任务失败";
+                        failIssueIds.add(issueId);
+                        errors.put(issueId, errorMsg);
+                        log.warn("更新任务失败，任务ID: {}", issueId);
+                    }
+                } catch (Exception e) {
+                    String errorMsg = "处理任务失败: " + e.getMessage();
+                    failIssueIds.add(issueId);
+                    errors.put(issueId, errorMsg);
+                    log.warn("处理任务失败，任务ID: {}, 错误: {}", issueId, e.getMessage());
+                }
+            }
+
+            // 检查是否有未找到的任务ID
+            Set<Long> foundIssueIds = issues.stream().map(Issue::getId).collect(Collectors.toSet());
+            for (Long issueId : issueIds) {
+                if (!foundIssueIds.contains(issueId)) {
+                    failIssueIds.add(issueId);
+                    errors.put(issueId, "任务不存在");
+                }
+            }
+
+            log.info("批量关联任务到版本完成，项目ID: {}, 版本ID: {}, 成功: {}, 失败: {}", 
+                    projectId, versionId, successCount, failIssueIds.size());
+
+            return VersionIssuesBatchAssignResponseDTO.builder()
+                    .successCount(successCount)
+                    .failCount(failIssueIds.size())
+                    .successIssueIds(successIssueIds)
+                    .failIssueIds(failIssueIds)
+                    .errors(errors)
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
     }
 }
