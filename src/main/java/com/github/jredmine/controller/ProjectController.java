@@ -33,6 +33,7 @@ import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDT
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
+import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -418,5 +419,15 @@ public class ProjectController {
             @Valid @RequestBody VersionIssuesBatchUnassignRequestDTO requestDTO) {
         VersionIssuesBatchUnassignResponseDTO result = projectService.batchUnassignIssuesFromVersion(projectId, id, requestDTO);
         return ApiResponse.success("批量取消关联完成", result);
+    }
+
+    @Operation(summary = "获取版本进度跟踪", description = "获取版本进度跟踪信息，包括任务完成情况、里程碑节点、进度图表数据等。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
+    @GetMapping("/{projectId}/versions/{id}/progress")
+    public ApiResponse<VersionProgressResponseDTO> getVersionProgress(
+            @PathVariable Long projectId,
+            @PathVariable Integer id) {
+        VersionProgressResponseDTO result = projectService.getVersionProgress(projectId, id);
+        return ApiResponse.success(result);
     }
 }

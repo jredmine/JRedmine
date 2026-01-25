@@ -23,6 +23,7 @@ import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDT
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
+import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -80,6 +81,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -3897,5 +3899,341 @@ public class ProjectService {
             MDC.remove("projectId");
             MDC.remove("versionId");
         }
+    }
+
+    /**
+     * 获取版本进度跟踪信息
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @return 版本进度跟踪信息
+     */
+    public VersionProgressResponseDTO getVersionProgress(Long projectId, Integer versionId) {
+        MDC.put("operation", "get_version_progress");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始查询版本进度，项目ID: {}, 版本ID: {}", projectId, versionId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 查询版本关联的所有任务
+            LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+            issueQuery.eq(Issue::getFixedVersionId, versionId.longValue())
+                     .eq(Issue::getProjectId, projectId);
+            List<Issue> issues = issueMapper.selectList(issueQuery);
+
+            // 获取所有状态信息
+            List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
+            Map<Integer, IssueStatus> statusMap = allStatuses.stream()
+                    .collect(Collectors.toMap(IssueStatus::getId, s -> s));
+
+            // 计算总体进度
+            long totalIssues = issues.size();
+            long completedIssues = 0;
+            long inProgressIssues = 0;
+            long pendingIssues = 0;
+            double totalDoneRatio = 0;
+
+            for (Issue issue : issues) {
+                Integer doneRatio = issue.getDoneRatio() != null ? issue.getDoneRatio() : 0;
+                totalDoneRatio += doneRatio;
+
+                if (doneRatio >= 100) {
+                    completedIssues++;
+                } else if (doneRatio > 0) {
+                    inProgressIssues++;
+                } else {
+                    pendingIssues++;
+                }
+            }
+
+            double overallProgress = totalIssues > 0 ? totalDoneRatio / totalIssues : 0.0;
+
+            // 按状态统计任务
+            Map<String, VersionProgressResponseDTO.TaskStatusStatistics> taskStatusStatistics = new HashMap<>();
+            Map<Integer, List<Issue>> issuesByStatus = issues.stream()
+                    .collect(Collectors.groupingBy(Issue::getStatusId));
+
+            for (Map.Entry<Integer, List<Issue>> entry : issuesByStatus.entrySet()) {
+                IssueStatus status = statusMap.get(entry.getKey());
+                String statusName = status != null ? status.getName() : "未知";
+                
+                List<Issue> statusIssues = entry.getValue();
+                double avgDoneRatio = statusIssues.stream()
+                        .filter(i -> i.getDoneRatio() != null)
+                        .mapToInt(Issue::getDoneRatio)
+                        .average()
+                        .orElse(0.0);
+
+                taskStatusStatistics.put(statusName, VersionProgressResponseDTO.TaskStatusStatistics.builder()
+                        .statusName(statusName)
+                        .count((long) statusIssues.size())
+                        .averageDoneRatio(Math.round(avgDoneRatio * 100.0) / 100.0)
+                        .build());
+            }
+
+            // 按跟踪器统计
+            Map<String, Long> taskTrackerStatistics = issues.stream()
+                    .collect(Collectors.groupingBy(issue -> {
+                        Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+                        return tracker != null ? tracker.getName() : "未知";
+                    }, Collectors.counting()));
+
+            // 按优先级统计
+            Map<String, Long> taskPriorityStatistics = issues.stream()
+                    .collect(Collectors.groupingBy(issue -> {
+                        String priorityName = getPriorityName(issue.getPriorityId());
+                        return priorityName != null ? priorityName : "优先级" + issue.getPriorityId();
+                    }, Collectors.counting()));
+
+            // 时间进度计算
+            LocalDate startDate = issues.stream()
+                    .filter(i -> i.getStartDate() != null)
+                    .map(Issue::getStartDate)
+                    .min(LocalDate::compareTo)
+                    .orElse(null);
+
+            LocalDate dueDate = issues.stream()
+                    .filter(i -> i.getDueDate() != null)
+                    .map(Issue::getDueDate)
+                    .max(LocalDate::compareTo)
+                    .orElse(null);
+
+            LocalDate effectiveDate = version.getEffectiveDate();
+            LocalDate estimatedCompletionDate = effectiveDate != null ? effectiveDate : dueDate;
+
+            // 计算已用天数和剩余天数
+            Long elapsedDays = null;
+            Long remainingDays = null;
+            Double timeProgress = null;
+
+            if (startDate != null && estimatedCompletionDate != null) {
+                LocalDate today = LocalDate.now();
+                elapsedDays = ChronoUnit.DAYS.between(startDate, today);
+                remainingDays = ChronoUnit.DAYS.between(today, estimatedCompletionDate);
+                
+                long totalDays = ChronoUnit.DAYS.between(startDate, estimatedCompletionDate);
+                if (totalDays > 0) {
+                    timeProgress = Math.min(100.0, Math.max(0.0, (elapsedDays.doubleValue() / totalDays) * 100.0));
+                }
+            }
+
+            // 生成里程碑节点
+            List<VersionProgressResponseDTO.MilestoneNode> milestones = generateMilestones(
+                    issues, startDate, estimatedCompletionDate, version);
+
+            // 生成每日进度数据
+            List<VersionProgressResponseDTO.DailyProgressData> dailyProgressData = generateDailyProgressData(
+                    issues, startDate, estimatedCompletionDate);
+
+            // 完成度分布数据
+            Map<String, Long> completionDistribution = new HashMap<>();
+            completionDistribution.put("已完成(100%)", issues.stream()
+                    .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() >= 100)
+                    .count());
+            completionDistribution.put("进行中(1-99%)", issues.stream()
+                    .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() > 0 && i.getDoneRatio() < 100)
+                    .count());
+            completionDistribution.put("待处理(0%)", issues.stream()
+                    .filter(i -> i.getDoneRatio() == null || i.getDoneRatio() == 0)
+                    .count());
+
+            // 工时进度数据
+            double estimatedHours = issues.stream()
+                    .filter(i -> i.getEstimatedHours() != null)
+                    .mapToDouble(Issue::getEstimatedHours)
+                    .sum();
+
+            List<Long> issueIds = issues.stream().map(Issue::getId).collect(Collectors.toList());
+            double spentHours = 0.0;
+            if (!issueIds.isEmpty()) {
+                LambdaQueryWrapper<TimeEntry> timeEntryQuery = new LambdaQueryWrapper<>();
+                timeEntryQuery.eq(TimeEntry::getProjectId, projectId)
+                             .in(TimeEntry::getIssueId, issueIds)
+                             .isNotNull(TimeEntry::getHours);
+                List<TimeEntry> timeEntries = timeEntryMapper.selectList(timeEntryQuery);
+                
+                spentHours = timeEntries.stream()
+                        .filter(te -> te.getHours() != null)
+                        .mapToDouble(TimeEntry::getHours)
+                        .sum();
+            }
+
+            double remainingHours = Math.max(0, estimatedHours - spentHours);
+            double hoursProgress = estimatedHours > 0 ? (spentHours / estimatedHours) * 100.0 : 0.0;
+
+            VersionProgressResponseDTO.HoursProgressData hoursProgressData = 
+                    VersionProgressResponseDTO.HoursProgressData.builder()
+                            .estimatedHours(Math.round(estimatedHours * 100.0) / 100.0)
+                            .spentHours(Math.round(spentHours * 100.0) / 100.0)
+                            .remainingHours(Math.round(remainingHours * 100.0) / 100.0)
+                            .progress(Math.round(hoursProgress * 100.0) / 100.0)
+                            .build();
+
+            log.info("版本进度查询成功，版本ID: {}, 总体进度: {}%", versionId, overallProgress);
+
+            return VersionProgressResponseDTO.builder()
+                    .versionId(versionId)
+                    .versionName(version.getName())
+                    .versionStatus(version.getStatus())
+                    .effectiveDate(effectiveDate)
+                    .overallProgress(Math.round(overallProgress * 100.0) / 100.0)
+                    .totalIssues(totalIssues)
+                    .completedIssues(completedIssues)
+                    .inProgressIssues(inProgressIssues)
+                    .pendingIssues(pendingIssues)
+                    .taskStatusStatistics(taskStatusStatistics)
+                    .taskTrackerStatistics(taskTrackerStatistics)
+                    .taskPriorityStatistics(taskPriorityStatistics)
+                    .startDate(startDate)
+                    .dueDate(dueDate)
+                    .estimatedCompletionDate(estimatedCompletionDate)
+                    .elapsedDays(elapsedDays)
+                    .remainingDays(remainingDays)
+                    .timeProgress(timeProgress != null ? Math.round(timeProgress * 100.0) / 100.0 : null)
+                    .milestones(milestones)
+                    .dailyProgressData(dailyProgressData)
+                    .completionDistribution(completionDistribution)
+                    .hoursProgress(hoursProgressData)
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 生成里程碑节点
+     */
+    private List<VersionProgressResponseDTO.MilestoneNode> generateMilestones(
+            List<Issue> issues, LocalDate startDate, LocalDate endDate, Version version) {
+        List<VersionProgressResponseDTO.MilestoneNode> milestones = new ArrayList<>();
+
+        if (startDate != null) {
+            // 开始节点
+            milestones.add(VersionProgressResponseDTO.MilestoneNode.builder()
+                    .name("开始")
+                    .date(startDate)
+                    .type("start")
+                    .description("版本开始日期")
+                    .expectedIssues((long) issues.size())
+                    .completedIssues(0L)
+                    .progress(0.0)
+                    .build());
+        }
+
+        // 中间里程碑（25%, 50%, 75%）
+        if (startDate != null && endDate != null) {
+            long totalDays = ChronoUnit.DAYS.between(startDate, endDate);
+            if (totalDays > 0) {
+                for (int percent : new int[]{25, 50, 75}) {
+                    LocalDate milestoneDate = startDate.plusDays(totalDays * percent / 100);
+                    long expectedCount = issues.size() * percent / 100;
+                    long completedCount = issues.stream()
+                            .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() >= 100)
+                            .filter(i -> {
+                                if (i.getUpdatedOn() == null) return false;
+                                LocalDate updatedDate = i.getUpdatedOn().toLocalDate();
+                                return updatedDate.isBefore(milestoneDate) || updatedDate.equals(milestoneDate);
+                            })
+                            .count();
+
+                    milestones.add(VersionProgressResponseDTO.MilestoneNode.builder()
+                            .name(percent + "%里程碑")
+                            .date(milestoneDate)
+                            .type("milestone")
+                            .description(percent + "%进度节点")
+                            .expectedIssues(expectedCount)
+                            .completedIssues(completedCount)
+                            .progress(expectedCount > 0 ? (completedCount * 100.0 / expectedCount) : 0.0)
+                            .build());
+                }
+            }
+        }
+
+        // 结束节点
+        if (endDate != null) {
+            long completedCount = issues.stream()
+                    .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() >= 100)
+                    .count();
+            double progress = issues.size() > 0 ? (completedCount * 100.0 / issues.size()) : 0.0;
+
+            milestones.add(VersionProgressResponseDTO.MilestoneNode.builder()
+                    .name("完成")
+                    .date(endDate)
+                    .type("end")
+                    .description("版本截止日期")
+                    .expectedIssues((long) issues.size())
+                    .completedIssues(completedCount)
+                    .progress(Math.round(progress * 100.0) / 100.0)
+                    .build());
+        }
+
+        return milestones;
+    }
+
+    /**
+     * 生成每日进度数据
+     */
+    private List<VersionProgressResponseDTO.DailyProgressData> generateDailyProgressData(
+            List<Issue> issues, LocalDate startDate, LocalDate endDate) {
+        List<VersionProgressResponseDTO.DailyProgressData> dailyData = new ArrayList<>();
+
+        if (startDate == null || endDate == null) {
+            return dailyData;
+        }
+
+        // 按日期分组统计任务完成情况
+        Map<LocalDate, Long> dailyCompleted = new HashMap<>();
+        for (Issue issue : issues) {
+            if (issue.getDoneRatio() != null && issue.getDoneRatio() >= 100 && issue.getUpdatedOn() != null) {
+                LocalDate completedDate = issue.getUpdatedOn().toLocalDate();
+                dailyCompleted.merge(completedDate, 1L, Long::sum);
+            }
+        }
+
+        // 生成每日数据
+        LocalDate currentDate = startDate;
+        long cumulativeCompleted = 0;
+
+        while (!currentDate.isAfter(endDate) && !currentDate.isAfter(LocalDate.now())) {
+            long dayCompleted = dailyCompleted.getOrDefault(currentDate, 0L);
+            cumulativeCompleted += dayCompleted;
+            
+            double progress = issues.size() > 0 ? (cumulativeCompleted * 100.0 / issues.size()) : 0.0;
+
+            dailyData.add(VersionProgressResponseDTO.DailyProgressData.builder()
+                    .date(currentDate)
+                    .completedCount(dayCompleted)
+                    .cumulativeCompleted(cumulativeCompleted)
+                    .progress(Math.round(progress * 100.0) / 100.0)
+                    .build());
+
+            currentDate = currentDate.plusDays(1);
+        }
+
+        return dailyData;
     }
 }
