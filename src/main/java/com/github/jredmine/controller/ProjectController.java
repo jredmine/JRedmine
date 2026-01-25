@@ -31,9 +31,11 @@ import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
+import com.github.jredmine.dto.request.project.VersionStatusUpdateRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
+import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -429,5 +431,16 @@ public class ProjectController {
             @PathVariable Integer id) {
         VersionProgressResponseDTO result = projectService.getVersionProgress(projectId, id);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "更新版本状态", description = "更新版本状态（open/locked/closed），并记录状态变更历史。需要认证，需要 manage_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_versions')")
+    @PutMapping("/{projectId}/versions/{id}/status")
+    public ApiResponse<VersionStatusUpdateResponseDTO> updateVersionStatus(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody VersionStatusUpdateRequestDTO requestDTO) {
+        VersionStatusUpdateResponseDTO result = projectService.updateVersionStatus(projectId, id, requestDTO);
+        return ApiResponse.success("版本状态更新成功", result);
     }
 }

@@ -21,9 +21,11 @@ import com.github.jredmine.dto.request.project.VersionUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
+import com.github.jredmine.dto.request.project.VersionStatusUpdateRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
+import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -59,9 +61,13 @@ import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.TimeEntryMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
 import com.github.jredmine.mapper.workflow.EnumerationMapper;
+import com.github.jredmine.mapper.issue.JournalMapper;
+import com.github.jredmine.mapper.issue.JournalDetailMapper;
 import com.github.jredmine.entity.IssueStatus;
 import com.github.jredmine.entity.TimeEntry;
 import com.github.jredmine.entity.Enumeration;
+import com.github.jredmine.entity.Journal;
+import com.github.jredmine.entity.JournalDetail;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
@@ -81,6 +87,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Date;
@@ -115,6 +122,8 @@ public class ProjectService {
     private final TimeEntryMapper timeEntryMapper;
     private final IssueStatusMapper issueStatusMapper;
     private final EnumerationMapper enumerationMapper;
+    private final JournalMapper journalMapper;
+    private final JournalDetailMapper journalDetailMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final IssueService issueService;
@@ -4235,5 +4244,149 @@ public class ProjectService {
         }
 
         return dailyData;
+    }
+
+    /**
+     * 更新版本状态
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @param requestDTO 状态更新请求
+     * @return 状态更新响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionStatusUpdateResponseDTO updateVersionStatus(Long projectId, Integer versionId,
+            VersionStatusUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_version_status");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始更新版本状态，项目ID: {}, 版本ID: {}, 新状态: {}", projectId, versionId, requestDTO.getStatus());
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 验证状态值
+            if (!VersionStatus.isValid(requestDTO.getStatus())) {
+                log.warn("无效的状态值，版本ID: {}, 状态: {}", versionId, requestDTO.getStatus());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "无效的状态值");
+            }
+
+            // 保存旧状态
+            String oldStatus = version.getStatus();
+            String newStatus = requestDTO.getStatus();
+
+            // 如果状态没有变化，直接返回
+            if (oldStatus != null && oldStatus.equals(newStatus)) {
+                log.info("版本状态未变化，版本ID: {}, 状态: {}", versionId, newStatus);
+                User currentUser = securityUtils.getCurrentUser();
+                return VersionStatusUpdateResponseDTO.builder()
+                        .versionId(versionId)
+                        .versionName(version.getName())
+                        .oldStatus(oldStatus)
+                        .newStatus(newStatus)
+                        .updatedOn(version.getUpdatedOn())
+                        .operatorId(currentUser.getId())
+                        .operatorName(currentUser.getFirstname() + " " + currentUser.getLastname())
+                        .notes(requestDTO.getNotes())
+                        .build();
+            }
+
+            // 更新版本状态
+            version.setStatus(newStatus);
+            version.setUpdatedOn(LocalDateTime.now());
+            int updateResult = versionMapper.updateById(version);
+            if (updateResult <= 0) {
+                log.error("版本状态更新失败，更新数据库失败，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "版本状态更新失败");
+            }
+
+            log.info("版本状态更新成功，版本ID: {}, 旧状态: {}, 新状态: {}", versionId, oldStatus, newStatus);
+
+            // 获取当前用户
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+
+            // 记录状态变更历史到 journals 表
+            Journal journal = new Journal();
+            journal.setJournalizedId(versionId);
+            journal.setJournalizedType("Version");
+            journal.setUserId(currentUserId.intValue());
+            journal.setNotes(requestDTO.getNotes());
+            journal.setPrivateNotes(false);
+            journal.setCreatedOn(LocalDateTime.now());
+            journal.setUpdatedOn(LocalDateTime.now());
+
+            int journalInsertResult = journalMapper.insert(journal);
+            if (journalInsertResult <= 0) {
+                log.warn("创建活动日志失败，版本ID: {}", versionId);
+            } else {
+                // 记录状态变更详情
+                String oldStatusName = oldStatus != null ? getVersionStatusName(oldStatus) : "";
+                String newStatusName = getVersionStatusName(newStatus);
+
+                JournalDetail detail = new JournalDetail();
+                detail.setJournalId(journal.getId());
+                detail.setProperty("attr");
+                detail.setPropKey("status");
+                detail.setOldValue(oldStatusName);
+                detail.setValue(newStatusName);
+
+                int detailInsertResult = journalDetailMapper.insert(detail);
+                if (detailInsertResult <= 0) {
+                    log.warn("创建活动详情失败，版本ID: {}, Journal ID: {}", versionId, journal.getId());
+                } else {
+                    log.debug("记录版本状态变更历史成功，版本ID: {}, Journal ID: {}, Detail ID: {}",
+                            versionId, journal.getId(), detail.getId());
+                }
+            }
+
+            // 构建响应
+            return VersionStatusUpdateResponseDTO.builder()
+                    .versionId(versionId)
+                    .versionName(version.getName())
+                    .oldStatus(oldStatus)
+                    .newStatus(newStatus)
+                    .updatedOn(version.getUpdatedOn())
+                    .operatorId(currentUserId)
+                    .operatorName(currentUser.getFirstname() + " " + currentUser.getLastname())
+                    .notes(requestDTO.getNotes())
+                    .journalId(journal.getId())
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 获取版本状态名称
+     */
+    private String getVersionStatusName(String status) {
+        if (status == null) {
+            return "";
+        }
+        VersionStatus versionStatus = VersionStatus.fromCode(status);
+        return versionStatus != null ? versionStatus.getDescription() : status;
     }
 }
