@@ -5,6 +5,8 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.activity.ActivityItemResponseDTO;
 import com.github.jredmine.dto.response.activity.ActivityStatsResponseDTO;
+import com.github.jredmine.dto.response.activity.CommentResponseDTO;
+import jakarta.validation.Valid;
 import com.github.jredmine.service.ActivityService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -208,5 +210,47 @@ public class ActivityController {
         );
         
         return ResponseEntity.ok(ApiResponse.success(types));
+    }
+
+    @Operation(summary = "添加评论", description = "为指定对象添加评论")
+    @PostMapping("/comment")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<CommentResponseDTO>> createComment(
+            @Valid @RequestBody CommentCreateRequestDTO requestDTO) {
+
+        log.debug("添加评论请求: {}", requestDTO);
+
+        CommentResponseDTO comment = activityService.createComment(requestDTO);
+        
+        return ResponseEntity.ok(ApiResponse.success(comment));
+    }
+
+    @Operation(summary = "更新评论", description = "更新指定的评论内容")
+    @PutMapping("/{id}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<CommentResponseDTO>> updateComment(
+            @Parameter(description = "评论ID", required = true)
+            @PathVariable Long id,
+            @Valid @RequestBody CommentUpdateRequestDTO requestDTO) {
+
+        log.debug("更新评论请求: id={}, request={}", id, requestDTO);
+
+        CommentResponseDTO comment = activityService.updateComment(id, requestDTO);
+        
+        return ResponseEntity.ok(ApiResponse.success(comment));
+    }
+
+    @Operation(summary = "删除评论", description = "删除指定的评论")
+    @DeleteMapping("/{id}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<Void>> deleteComment(
+            @Parameter(description = "评论ID", required = true)
+            @PathVariable Long id) {
+
+        log.debug("删除评论请求: id={}", id);
+
+        activityService.deleteComment(id);
+        
+        return ResponseEntity.ok(ApiResponse.success(null));
     }
 }

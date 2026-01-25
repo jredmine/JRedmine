@@ -3,10 +3,15 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.activity.ActivityQueryRequestDTO;
+import com.github.jredmine.dto.request.activity.CommentCreateRequestDTO;
+import com.github.jredmine.dto.request.activity.CommentUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.activity.ActivityItemResponseDTO;
 import com.github.jredmine.dto.response.activity.ActivityStatsResponseDTO;
+import com.github.jredmine.dto.response.activity.CommentResponseDTO;
 import com.github.jredmine.dto.response.activity.FieldChangeDTO;
+import com.github.jredmine.exception.BusinessException;
+import com.github.jredmine.util.SecurityUtils;
 import com.github.jredmine.entity.*;
 import com.github.jredmine.mapper.issue.JournalMapper;
 import com.github.jredmine.mapper.issue.JournalDetailMapper;
@@ -37,6 +42,7 @@ public class ActivityService {
     private final IssueMapper issueMapper;
     private final ProjectMapper projectMapper;
     private final UserMapper userMapper;
+    private final SecurityUtils securityUtils;
 
     /**
      * 查询活动流
@@ -193,13 +199,15 @@ public class ActivityService {
         
         // 项目筛选（通过关联对象）
         if (requestDTO.getProjectId() != null) {
-            // 如果是Issue类型，直接通过issue表关联
-            if ("Issue".equals(requestDTO.getObjectType()) || requestDTO.getObjectType() == null) {
-                queryWrapper.and(wrapper -> {
-                    wrapper.eq(Journal::getJournalizedType, "Issue")
-                           .exists("SELECT 1 FROM issues i WHERE i.id = journals.journalized_id AND i.project_id = " + requestDTO.getProjectId());
-                });
-            }
+            queryWrapper.and(wrapper -> {
+                // Project类型：直接筛选项目ID
+                wrapper.and(w -> w.eq(Journal::getJournalizedType, "Project")
+                                 .eq(Journal::getJournalizedId, requestDTO.getProjectId()))
+                       // 或Issue类型：通过issues表关联项目ID  
+                       .or(w -> w.eq(Journal::getJournalizedType, "Issue")
+                                 .exists("SELECT 1 FROM issues i WHERE i.id = journals.journalized_id AND i.project_id = " + requestDTO.getProjectId()));
+                       // TODO: 添加其他类型的项目关联逻辑
+            });
         }
         
         // 关键词搜索
@@ -321,6 +329,14 @@ public class ActivityService {
                 info.projectId = issue.getProjectId().longValue();
                 info.projectName = getProjectName(issue.getProjectId().longValue());
             }
+        } else if ("Project".equals(objectType)) {
+            Project project = projectMapper.selectById(objectId);
+            if (project != null) {
+                info.title = project.getName();
+                info.url = "/projects/" + project.getIdentifier();
+                info.projectId = project.getId().longValue();
+                info.projectName = project.getName();
+            }
         }
         // TODO: 添加其他对象类型的处理
         
@@ -384,6 +400,8 @@ public class ActivityService {
         if ("Issue".equals(journal.getJournalizedType())) {
             Issue issue = issueMapper.selectById(journal.getJournalizedId());
             return issue != null ? issue.getProjectId().longValue() : null;
+        } else if ("Project".equals(journal.getJournalizedType())) {
+            return journal.getJournalizedId().longValue();
         }
         return null;
     }
@@ -413,5 +431,179 @@ public class ActivityService {
     private String getValueDisplay(String fieldName, String value) {
         // TODO: 实现值到显示名的转换（如状态ID转状态名）
         return value;
+    }
+
+    /**
+     * 添加评论
+     */
+    public CommentResponseDTO createComment(CommentCreateRequestDTO requestDTO) {
+        // 获取当前用户
+        Long currentUserId = securityUtils.getCurrentUserId();
+        if (currentUserId == null) {
+            throw new BusinessException("用户未登录");
+        }
+
+        // 验证对象是否存在
+        validateObject(requestDTO.getObjectType(), requestDTO.getObjectId());
+
+        // 创建Journal记录
+        Journal journal = new Journal();
+        journal.setJournalizedType(requestDTO.getObjectType());
+        journal.setJournalizedId(requestDTO.getObjectId().intValue());
+        journal.setUserId(currentUserId.intValue());
+        journal.setNotes(requestDTO.getNotes().trim());
+        journal.setCreatedOn(LocalDateTime.now());
+        journal.setUpdatedOn(LocalDateTime.now());
+        journal.setPrivateNotes(requestDTO.getIsPrivate() != null && requestDTO.getIsPrivate());
+
+        // 保存到数据库
+        int result = journalMapper.insert(journal);
+        if (result <= 0) {
+            throw new BusinessException("评论保存失败");
+        }
+
+        log.info("用户 {} 为 {} {} 添加了评论", currentUserId, requestDTO.getObjectType(), requestDTO.getObjectId());
+
+        // 返回评论信息
+        return convertToCommentResponse(journal);
+    }
+
+    /**
+     * 更新评论
+     */
+    public CommentResponseDTO updateComment(Long commentId, CommentUpdateRequestDTO requestDTO) {
+        // 获取当前用户
+        Long currentUserId = securityUtils.getCurrentUserId();
+        if (currentUserId == null) {
+            throw new BusinessException("用户未登录");
+        }
+
+        // 查询评论记录
+        Journal journal = journalMapper.selectById(commentId);
+        if (journal == null) {
+            throw new BusinessException("评论不存在");
+        }
+
+        // 权限检查：只有评论作者或管理员可以编辑
+        if (!currentUserId.equals(journal.getUserId().longValue()) && !isAdmin()) {
+            throw new BusinessException("无权限编辑此评论");
+        }
+
+        // 更新评论内容
+        journal.setNotes(requestDTO.getNotes().trim());
+        journal.setUpdatedOn(LocalDateTime.now());
+        journal.setUpdatedById(currentUserId.intValue());
+        
+        if (requestDTO.getIsPrivate() != null) {
+            journal.setPrivateNotes(requestDTO.getIsPrivate());
+        }
+
+        // 保存更新
+        int result = journalMapper.updateById(journal);
+        if (result <= 0) {
+            throw new BusinessException("评论更新失败");
+        }
+
+        log.info("用户 {} 更新了评论 {}", currentUserId, commentId);
+
+        // 返回更新后的评论信息
+        return convertToCommentResponse(journal);
+    }
+
+    /**
+     * 删除评论
+     */
+    public void deleteComment(Long commentId) {
+        // 获取当前用户
+        Long currentUserId = securityUtils.getCurrentUserId();
+        if (currentUserId == null) {
+            throw new BusinessException("用户未登录");
+        }
+
+        // 查询评论记录
+        Journal journal = journalMapper.selectById(commentId);
+        if (journal == null) {
+            throw new BusinessException("评论不存在");
+        }
+
+        // 权限检查：只有评论作者或管理员可以删除
+        if (!currentUserId.equals(journal.getUserId().longValue()) && !isAdmin()) {
+            throw new BusinessException("无权限删除此评论");
+        }
+
+        // 检查是否有字段变更记录
+        LambdaQueryWrapper<JournalDetail> detailWrapper = new LambdaQueryWrapper<>();
+        detailWrapper.eq(JournalDetail::getJournalId, commentId);
+        long detailCount = journalDetailMapper.selectCount(detailWrapper);
+        
+        if (detailCount > 0) {
+            throw new BusinessException("包含字段变更记录的活动不能删除，只能编辑备注");
+        }
+
+        // 删除评论
+        int result = journalMapper.deleteById(commentId);
+        if (result <= 0) {
+            throw new BusinessException("评论删除失败");
+        }
+
+        log.info("用户 {} 删除了评论 {}", currentUserId, commentId);
+    }
+
+    /**
+     * 验证关联对象是否存在
+     */
+    private void validateObject(String objectType, Long objectId) {
+        switch (objectType) {
+            case "Issue":
+                Issue issue = issueMapper.selectById(objectId);
+                if (issue == null) {
+                    throw new BusinessException("任务不存在");
+                }
+                break;
+            case "Project":
+                Project project = projectMapper.selectById(objectId);
+                if (project == null) {
+                    throw new BusinessException("项目不存在");
+                }
+                break;
+            // TODO: 添加其他对象类型的验证
+            default:
+                throw new BusinessException("不支持的对象类型: " + objectType);
+        }
+    }
+
+    /**
+     * 检查当前用户是否为管理员
+     */
+    private boolean isAdmin() {
+        try {
+            User currentUser = securityUtils.getCurrentUser();
+            return currentUser != null && Boolean.TRUE.equals(currentUser.getAdmin());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 转换为评论响应DTO
+     */
+    private CommentResponseDTO convertToCommentResponse(Journal journal) {
+        User user = getUserById(journal.getUserId());
+        User updatedByUser = journal.getUpdatedById() != null ? getUserById(journal.getUpdatedById()) : null;
+
+        return CommentResponseDTO.builder()
+                .id(journal.getId().longValue())
+                .objectType(journal.getJournalizedType())
+                .objectId(journal.getJournalizedId().longValue())
+                .notes(journal.getNotes())
+                .isPrivate(journal.getPrivateNotes() != null && journal.getPrivateNotes())
+                .userId(journal.getUserId().longValue())
+                .userName(user != null ? getUserDisplayName(user) : null)
+                .userLogin(user != null ? user.getLogin() : null)
+                .createdOn(journal.getCreatedOn())
+                .updatedOn(journal.getUpdatedOn())
+                .updatedById(updatedByUser != null ? updatedByUser.getId().longValue() : null)
+                .updatedByName(updatedByUser != null ? getUserDisplayName(updatedByUser) : null)
+                .build();
     }
 }
