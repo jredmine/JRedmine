@@ -26,6 +26,7 @@ import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponse
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
+import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -4388,5 +4389,307 @@ public class ProjectService {
         }
         VersionStatus versionStatus = VersionStatus.fromCode(status);
         return versionStatus != null ? versionStatus.getDescription() : status;
+    }
+
+    /**
+     * 获取共享版本的项目列表
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @return 共享项目列表
+     */
+    public VersionSharedProjectsResponseDTO getVersionSharedProjects(Long projectId, Integer versionId) {
+        MDC.put("operation", "get_version_shared_projects");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始查询版本共享项目列表，项目ID: {}, 版本ID: {}", projectId, versionId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            String sharing = version.getSharing() != null ? version.getSharing() : "none";
+            VersionSharing sharingEnum = VersionSharing.fromCode(sharing);
+            String sharingDescription = sharingEnum != null ? sharingEnum.getDescription() : sharing;
+
+            // 根据sharing配置查询共享项目
+            List<VersionSharedProjectsResponseDTO.SharedProjectInfo> sharedProjects = 
+                    querySharedProjectsBySharing(version.getProjectId().longValue(), sharing);
+
+            log.info("版本共享项目列表查询成功，版本ID: {}, 共享方式: {}, 共享项目数: {}",
+                    versionId, sharing, sharedProjects.size());
+
+            return VersionSharedProjectsResponseDTO.builder()
+                    .versionId(versionId)
+                    .versionName(version.getName())
+                    .ownerProjectId(projectId)
+                    .ownerProjectName(project.getName())
+                    .sharing(sharing)
+                    .sharingDescription(sharingDescription)
+                    .sharedProjects(sharedProjects)
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 根据sharing配置查询共享项目
+     *
+     * @param ownerProjectId 版本所属项目ID
+     * @param sharing 共享方式
+     * @return 共享项目列表
+     */
+    private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> querySharedProjectsBySharing(
+            Long ownerProjectId, String sharing) {
+        
+        List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
+        
+        // 获取所属项目
+        Project ownerProject = projectMapper.selectById(ownerProjectId);
+        if (ownerProject == null) {
+            return result;
+        }
+
+        VersionSharing sharingEnum = VersionSharing.fromCode(sharing);
+        if (sharingEnum == null) {
+            sharingEnum = VersionSharing.NONE;
+        }
+
+        switch (sharingEnum) {
+            case NONE:
+                // 不共享：只有所属项目
+                result.add(convertToSharedProjectInfo(ownerProject, "owner", "所属项目"));
+                break;
+
+            case DESCENDANTS:
+                // 共享给子项目：所属项目 + 所有子项目
+                result.add(convertToSharedProjectInfo(ownerProject, "owner", "所属项目"));
+                result.addAll(getDescendantProjects(ownerProjectId, "descendant", "子项目"));
+                break;
+
+            case HIERARCHY:
+                // 共享给项目层次结构：父项目 + 所属项目 + 子项目
+                result.addAll(getParentProjects(ownerProjectId, "parent", "父项目"));
+                result.add(convertToSharedProjectInfo(ownerProject, "owner", "所属项目"));
+                result.addAll(getDescendantProjects(ownerProjectId, "descendant", "子项目"));
+                break;
+
+            case TREE:
+                // 共享给项目树：从根项目到所有子孙项目
+                Long rootProjectId = getRootProjectId(ownerProjectId);
+                if (rootProjectId != null) {
+                    result.addAll(getTreeProjects(rootProjectId, ownerProjectId));
+                } else {
+                    // 如果找不到根项目，回退到descendants模式
+                    result.add(convertToSharedProjectInfo(ownerProject, "owner", "所属项目"));
+                    result.addAll(getDescendantProjects(ownerProjectId, "descendant", "子项目"));
+                }
+                break;
+
+            case SYSTEM:
+                // 系统共享：所有项目
+                List<Project> allProjects = projectMapper.selectList(null);
+                for (Project project : allProjects) {
+                    String relationType = project.getId().equals(ownerProjectId) ? "owner" : "system";
+                    String relationDesc = project.getId().equals(ownerProjectId) ? "所属项目" : "系统共享";
+                    result.add(convertToSharedProjectInfo(project, relationType, relationDesc));
+                }
+                break;
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取所有子项目
+     */
+    private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> getDescendantProjects(
+            Long parentProjectId, String relationType, String relationDescription) {
+        List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
+        
+        Project parentProject = projectMapper.selectById(parentProjectId);
+        if (parentProject == null) {
+            return result;
+        }
+
+        // 使用lft/rgt查询（如果可用）
+        if (parentProject.getLft() != null && parentProject.getRgt() != null) {
+            LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.gt(Project::getLft, parentProject.getLft())
+                       .lt(Project::getRgt, parentProject.getRgt())
+                       .ne(Project::getId, parentProjectId);
+            List<Project> descendants = projectMapper.selectList(queryWrapper);
+            for (Project project : descendants) {
+                result.add(convertToSharedProjectInfo(project, relationType, relationDescription));
+            }
+        } else {
+            // 使用parent_id递归查询
+            List<Project> allProjects = projectMapper.selectList(null);
+            Set<Long> descendantIds = new java.util.HashSet<>();
+            collectDescendantIds(allProjects, parentProjectId, descendantIds);
+            
+            for (Long descendantId : descendantIds) {
+                Project project = projectMapper.selectById(descendantId);
+                if (project != null) {
+                    result.add(convertToSharedProjectInfo(project, relationType, relationDescription));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取所有父项目（向上查找）
+     */
+    private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> getParentProjects(
+            Long projectId, String relationType, String relationDescription) {
+        List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
+        
+        Project currentProject = projectMapper.selectById(projectId);
+        if (currentProject == null || currentProject.getParentId() == null) {
+            return result;
+        }
+
+        // 向上查找所有父项目
+        Long parentId = currentProject.getParentId();
+        while (parentId != null) {
+            Project parentProject = projectMapper.selectById(parentId);
+            if (parentProject == null) {
+                break;
+            }
+            result.add(0, convertToSharedProjectInfo(parentProject, relationType, relationDescription));
+            parentId = parentProject.getParentId();
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取根项目ID（向上查找直到找到没有父项目的项目）
+     */
+    private Long getRootProjectId(Long projectId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            return null;
+        }
+
+        // 向上查找根项目
+        Long currentId = projectId;
+        while (currentId != null) {
+            Project currentProject = projectMapper.selectById(currentId);
+            if (currentProject == null) {
+                return null;
+            }
+            if (currentProject.getParentId() == null) {
+                return currentId;
+            }
+            currentId = currentProject.getParentId();
+        }
+
+        return projectId; // 如果找不到，返回当前项目ID
+    }
+
+    /**
+     * 获取项目树的所有项目（从根项目到所有子孙项目）
+     */
+    private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> getTreeProjects(
+            Long rootProjectId, Long ownerProjectId) {
+        List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
+        
+        Project rootProject = projectMapper.selectById(rootProjectId);
+        if (rootProject == null) {
+            return result;
+        }
+
+        // 使用lft/rgt查询（如果可用）
+        if (rootProject.getLft() != null && rootProject.getRgt() != null) {
+            LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.ge(Project::getLft, rootProject.getLft())
+                       .le(Project::getRgt, rootProject.getRgt());
+            List<Project> treeProjects = projectMapper.selectList(queryWrapper);
+            
+            for (Project project : treeProjects) {
+                String relationType;
+                String relationDesc;
+                if (project.getId().equals(ownerProjectId)) {
+                    relationType = "owner";
+                    relationDesc = "所属项目";
+                } else if (project.getId().equals(rootProjectId)) {
+                    relationType = "tree";
+                    relationDesc = "根项目";
+                } else {
+                    relationType = "tree";
+                    relationDesc = "项目树";
+                }
+                result.add(convertToSharedProjectInfo(project, relationType, relationDesc));
+            }
+        } else {
+            // 使用parent_id递归查询
+            List<Project> allProjects = projectMapper.selectList(null);
+            Set<Long> treeProjectIds = new java.util.HashSet<>();
+            treeProjectIds.add(rootProjectId);
+            collectDescendantIds(allProjects, rootProjectId, treeProjectIds);
+            
+            for (Long projectId : treeProjectIds) {
+                Project project = projectMapper.selectById(projectId);
+                if (project != null) {
+                    String relationType;
+                    String relationDesc;
+                    if (projectId.equals(ownerProjectId)) {
+                        relationType = "owner";
+                        relationDesc = "所属项目";
+                    } else if (projectId.equals(rootProjectId)) {
+                        relationType = "tree";
+                        relationDesc = "根项目";
+                    } else {
+                        relationType = "tree";
+                        relationDesc = "项目树";
+                    }
+                    result.add(convertToSharedProjectInfo(project, relationType, relationDesc));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 转换为共享项目信息
+     */
+    private VersionSharedProjectsResponseDTO.SharedProjectInfo convertToSharedProjectInfo(
+            Project project, String relationType, String relationDescription) {
+        return VersionSharedProjectsResponseDTO.SharedProjectInfo.builder()
+                .projectId(project.getId())
+                .projectName(project.getName())
+                .identifier(project.getIdentifier())
+                .parentId(project.getParentId())
+                .status(project.getStatus())
+                .isPublic(project.getIsPublic())
+                .relationType(relationType)
+                .relationDescription(relationDescription)
+                .build();
     }
 }

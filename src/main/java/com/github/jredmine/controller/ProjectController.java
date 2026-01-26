@@ -36,6 +36,7 @@ import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponse
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
+import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -442,5 +443,15 @@ public class ProjectController {
             @Valid @RequestBody VersionStatusUpdateRequestDTO requestDTO) {
         VersionStatusUpdateResponseDTO result = projectService.updateVersionStatus(projectId, id, requestDTO);
         return ApiResponse.success("版本状态更新成功", result);
+    }
+
+    @Operation(summary = "获取共享版本的项目列表", description = "根据版本的sharing配置，获取可以访问该版本的项目列表。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
+    @GetMapping("/{projectId}/versions/{id}/shared-projects")
+    public ApiResponse<VersionSharedProjectsResponseDTO> getVersionSharedProjects(
+            @PathVariable Long projectId,
+            @PathVariable Integer id) {
+        VersionSharedProjectsResponseDTO result = projectService.getVersionSharedProjects(projectId, id);
+        return ApiResponse.success(result);
     }
 }
