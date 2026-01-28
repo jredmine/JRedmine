@@ -33,6 +33,7 @@ import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDT
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionSharingUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionReleaseRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
@@ -40,6 +41,7 @@ import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.dto.response.project.VersionRoadmapResponseDTO;
+import com.github.jredmine.dto.response.project.VersionReleaseResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -476,5 +478,20 @@ public class ProjectController {
             @PathVariable Long projectId) {
         VersionRoadmapResponseDTO result = projectService.getVersionRoadmap(projectId);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "发布版本", description = "发布版本，将版本状态标记为已发布（closed），并记录发布历史。需要认证，需要 manage_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_versions')")
+    @PostMapping("/{projectId}/versions/{id}/release")
+    public ApiResponse<VersionReleaseResponseDTO> releaseVersion(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody(required = false) VersionReleaseRequestDTO requestDTO) {
+        // 如果请求体为空，创建默认的请求DTO
+        if (requestDTO == null) {
+            requestDTO = new VersionReleaseRequestDTO();
+        }
+        VersionReleaseResponseDTO result = projectService.releaseVersion(projectId, id, requestDTO);
+        return ApiResponse.success("版本发布成功", result);
     }
 }

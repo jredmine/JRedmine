@@ -23,6 +23,7 @@ import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDT
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionStatusUpdateRequestDTO;
 import com.github.jredmine.dto.request.project.VersionSharingUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionReleaseRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
@@ -30,6 +31,7 @@ import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.dto.response.project.VersionRoadmapResponseDTO;
+import com.github.jredmine.dto.response.project.VersionReleaseResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -84,8 +86,6 @@ import com.github.jredmine.mapper.user.RoleMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.util.SecurityUtils;
-import lombok.Builder;
-import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -4544,6 +4544,143 @@ public class ProjectService {
         }
         VersionSharing versionSharing = VersionSharing.fromCode(sharing);
         return versionSharing != null ? versionSharing.getDescription() : sharing;
+    }
+
+    /**
+     * 发布版本（标记为已发布）
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @param requestDTO 发布请求
+     * @return 发布响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionReleaseResponseDTO releaseVersion(Long projectId, Integer versionId,
+            VersionReleaseRequestDTO requestDTO) {
+        MDC.put("operation", "release_version");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始发布版本，项目ID: {}, 版本ID: {}", projectId, versionId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 检查版本是否已经关闭
+            String oldStatus = version.getStatus() != null ? version.getStatus() : "open";
+            if ("closed".equals(oldStatus)) {
+                log.warn("版本已经发布，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本已经发布，无需重复发布");
+            }
+
+            // 查询版本关联的任务统计
+            LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+            issueQuery.eq(Issue::getFixedVersionId, versionId.longValue())
+                     .eq(Issue::getProjectId, projectId);
+            List<Issue> issues = issueMapper.selectList(issueQuery);
+
+            long totalIssues = issues.size();
+            long completedIssues = issues.stream()
+                    .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() >= 100)
+                    .count();
+            long incompleteIssues = totalIssues - completedIssues;
+            double completionPercentage = totalIssues > 0 ? (completedIssues * 100.0 / totalIssues) : 0.0;
+
+            // 更新版本状态为closed
+            version.setStatus(VersionStatus.CLOSED.getCode());
+            version.setUpdatedOn(LocalDateTime.now());
+            int updateResult = versionMapper.updateById(version);
+            if (updateResult <= 0) {
+                log.error("版本发布失败，更新数据库失败，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "版本发布失败");
+            }
+
+            log.info("版本发布成功，版本ID: {}, 旧状态: {}, 新状态: closed", versionId, oldStatus);
+
+            // 获取当前用户
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+            LocalDateTime now = LocalDateTime.now();
+            LocalDate releaseDate = now.toLocalDate();
+
+            // 记录发布历史到 journals 表
+            Journal journal = new Journal();
+            journal.setJournalizedId(versionId);
+            journal.setJournalizedType("Version");
+            journal.setUserId(currentUserId.intValue());
+            String releaseNotes = requestDTO.getNotes() != null ? requestDTO.getNotes() : "版本已发布";
+            journal.setNotes(releaseNotes);
+            journal.setPrivateNotes(false);
+            journal.setCreatedOn(now);
+            journal.setUpdatedOn(now);
+
+            int journalInsertResult = journalMapper.insert(journal);
+            if (journalInsertResult <= 0) {
+                log.warn("创建活动日志失败，版本ID: {}", versionId);
+            } else {
+                // 记录状态变更详情
+                String oldStatusName = getVersionStatusName(oldStatus);
+                String newStatusName = getVersionStatusName(VersionStatus.CLOSED.getCode());
+
+                JournalDetail detail = new JournalDetail();
+                detail.setJournalId(journal.getId());
+                detail.setProperty("attr");
+                detail.setPropKey("status");
+                detail.setOldValue(oldStatusName);
+                detail.setValue(newStatusName);
+
+                int detailInsertResult = journalDetailMapper.insert(detail);
+                if (detailInsertResult <= 0) {
+                    log.warn("创建活动详情失败，版本ID: {}, Journal ID: {}", versionId, journal.getId());
+                } else {
+                    log.debug("记录版本发布历史成功，版本ID: {}, Journal ID: {}, Detail ID: {}",
+                            versionId, journal.getId(), detail.getId());
+                }
+            }
+
+            // 构建响应
+            return VersionReleaseResponseDTO.builder()
+                    .versionId(versionId)
+                    .versionName(version.getName())
+                    .oldStatus(oldStatus)
+                    .newStatus(VersionStatus.CLOSED.getCode())
+                    .releaseDate(releaseDate)
+                    .releasedOn(now)
+                    .operatorId(currentUserId)
+                    .operatorName(currentUser.getFirstname() + " " + currentUser.getLastname())
+                    .notes(releaseNotes)
+                    .journalId(journal.getId())
+                    .statistics(VersionReleaseResponseDTO.ReleaseStatistics.builder()
+                            .totalIssues(totalIssues)
+                            .completedIssues(completedIssues)
+                            .incompleteIssues(incompleteIssues)
+                            .completionPercentage(Math.round(completionPercentage * 100.0) / 100.0)
+                            .build())
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
     }
 
     /**
