@@ -32,10 +32,12 @@ import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionStatusUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionSharingUpdateRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
+import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
@@ -453,5 +455,16 @@ public class ProjectController {
             @PathVariable Integer id) {
         VersionSharedProjectsResponseDTO result = projectService.getVersionSharedProjects(projectId, id);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "更新版本共享方式", description = "更新版本共享方式（none/descendants/hierarchy/tree/system），并记录共享方式变更历史。需要认证，需要 manage_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_versions')")
+    @PutMapping("/{projectId}/versions/{id}/sharing")
+    public ApiResponse<VersionSharingUpdateResponseDTO> updateVersionSharing(
+            @PathVariable Long projectId,
+            @PathVariable Integer id,
+            @Valid @RequestBody VersionSharingUpdateRequestDTO requestDTO) {
+        VersionSharingUpdateResponseDTO result = projectService.updateVersionSharing(projectId, id, requestDTO);
+        return ApiResponse.success("版本共享方式更新成功", result);
     }
 }

@@ -22,10 +22,12 @@ import com.github.jredmine.dto.request.project.VersionIssuesRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchAssignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionIssuesBatchUnassignRequestDTO;
 import com.github.jredmine.dto.request.project.VersionStatusUpdateRequestDTO;
+import com.github.jredmine.dto.request.project.VersionSharingUpdateRequestDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchAssignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionIssuesBatchUnassignResponseDTO;
 import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
+import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
@@ -4389,6 +4391,156 @@ public class ProjectService {
         }
         VersionStatus versionStatus = VersionStatus.fromCode(status);
         return versionStatus != null ? versionStatus.getDescription() : status;
+    }
+
+    /**
+     * 更新版本共享方式
+     *
+     * @param projectId 项目ID
+     * @param versionId 版本ID
+     * @param requestDTO 共享方式更新请求
+     * @return 共享方式更新响应
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionSharingUpdateResponseDTO updateVersionSharing(Long projectId, Integer versionId,
+            VersionSharingUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_version_sharing");
+        MDC.put("projectId", String.valueOf(projectId));
+        MDC.put("versionId", String.valueOf(versionId));
+
+        try {
+            log.info("开始更新版本共享方式，项目ID: {}, 版本ID: {}, 新共享方式: {}", projectId, versionId, requestDTO.getSharing());
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询版本
+            Version version = versionMapper.selectById(versionId);
+            if (version == null) {
+                log.warn("版本不存在，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在");
+            }
+
+            // 验证版本是否属于该项目
+            if (!version.getProjectId().equals(projectId.intValue())) {
+                log.warn("版本不属于该项目，版本ID: {}, 版本项目ID: {}, 请求项目ID: {}",
+                        versionId, version.getProjectId(), projectId);
+                throw new BusinessException(ResultCode.PARAM_INVALID, "版本不属于该项目");
+            }
+
+            // 验证共享方式值
+            if (!VersionSharing.isValid(requestDTO.getSharing())) {
+                log.warn("无效的共享方式值，版本ID: {}, 共享方式: {}", versionId, requestDTO.getSharing());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "无效的共享方式值");
+            }
+
+            // 保存旧共享方式
+            String oldSharing = version.getSharing() != null ? version.getSharing() : "none";
+            String newSharing = requestDTO.getSharing();
+
+            // 如果共享方式没有变化，直接返回
+            if (oldSharing.equals(newSharing)) {
+                log.info("版本共享方式未变化，版本ID: {}, 共享方式: {}", versionId, newSharing);
+                User currentUser = securityUtils.getCurrentUser();
+                VersionSharing sharingEnum = VersionSharing.fromCode(newSharing);
+                return VersionSharingUpdateResponseDTO.builder()
+                        .versionId(versionId)
+                        .versionName(version.getName())
+                        .oldSharing(oldSharing)
+                        .newSharing(newSharing)
+                        .oldSharingDescription(getVersionSharingName(oldSharing))
+                        .newSharingDescription(sharingEnum != null ? sharingEnum.getDescription() : newSharing)
+                        .updatedOn(version.getUpdatedOn())
+                        .operatorId(currentUser.getId())
+                        .operatorName(currentUser.getFirstname() + " " + currentUser.getLastname())
+                        .notes(requestDTO.getNotes())
+                        .build();
+            }
+
+            // 更新版本共享方式
+            version.setSharing(newSharing);
+            version.setUpdatedOn(LocalDateTime.now());
+            int updateResult = versionMapper.updateById(version);
+            if (updateResult <= 0) {
+                log.error("版本共享方式更新失败，更新数据库失败，版本ID: {}", versionId);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "版本共享方式更新失败");
+            }
+
+            log.info("版本共享方式更新成功，版本ID: {}, 旧共享方式: {}, 新共享方式: {}", versionId, oldSharing, newSharing);
+
+            // 获取当前用户
+            User currentUser = securityUtils.getCurrentUser();
+            Long currentUserId = currentUser.getId();
+
+            // 记录共享方式变更历史到 journals 表
+            Journal journal = new Journal();
+            journal.setJournalizedId(versionId);
+            journal.setJournalizedType("Version");
+            journal.setUserId(currentUserId.intValue());
+            journal.setNotes(requestDTO.getNotes());
+            journal.setPrivateNotes(false);
+            journal.setCreatedOn(LocalDateTime.now());
+            journal.setUpdatedOn(LocalDateTime.now());
+
+            int journalInsertResult = journalMapper.insert(journal);
+            if (journalInsertResult <= 0) {
+                log.warn("创建活动日志失败，版本ID: {}", versionId);
+            } else {
+                // 记录共享方式变更详情
+                String oldSharingName = getVersionSharingName(oldSharing);
+                String newSharingName = getVersionSharingName(newSharing);
+
+                JournalDetail detail = new JournalDetail();
+                detail.setJournalId(journal.getId());
+                detail.setProperty("attr");
+                detail.setPropKey("sharing");
+                detail.setOldValue(oldSharingName);
+                detail.setValue(newSharingName);
+
+                int detailInsertResult = journalDetailMapper.insert(detail);
+                if (detailInsertResult <= 0) {
+                    log.warn("创建活动详情失败，版本ID: {}, Journal ID: {}", versionId, journal.getId());
+                } else {
+                    log.debug("记录版本共享方式变更历史成功，版本ID: {}, Journal ID: {}, Detail ID: {}",
+                            versionId, journal.getId(), detail.getId());
+                }
+            }
+
+            // 构建响应
+            VersionSharing sharingEnum = VersionSharing.fromCode(newSharing);
+            return VersionSharingUpdateResponseDTO.builder()
+                    .versionId(versionId)
+                    .versionName(version.getName())
+                    .oldSharing(oldSharing)
+                    .newSharing(newSharing)
+                    .oldSharingDescription(getVersionSharingName(oldSharing))
+                    .newSharingDescription(sharingEnum != null ? sharingEnum.getDescription() : newSharing)
+                    .updatedOn(version.getUpdatedOn())
+                    .operatorId(currentUserId)
+                    .operatorName(currentUser.getFirstname() + " " + currentUser.getLastname())
+                    .notes(requestDTO.getNotes())
+                    .journalId(journal.getId())
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+            MDC.remove("versionId");
+        }
+    }
+
+    /**
+     * 获取版本共享方式名称
+     */
+    private String getVersionSharingName(String sharing) {
+        if (sharing == null) {
+            return "";
+        }
+        VersionSharing versionSharing = VersionSharing.fromCode(sharing);
+        return versionSharing != null ? versionSharing.getDescription() : sharing;
     }
 
     /**
