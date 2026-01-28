@@ -39,6 +39,7 @@ import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
+import com.github.jredmine.dto.response.project.VersionRoadmapResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -466,5 +467,14 @@ public class ProjectController {
             @Valid @RequestBody VersionSharingUpdateRequestDTO requestDTO) {
         VersionSharingUpdateResponseDTO result = projectService.updateVersionSharing(projectId, id, requestDTO);
         return ApiResponse.success("版本共享方式更新成功", result);
+    }
+
+    @Operation(summary = "获取项目版本路线图", description = "获取项目版本路线图，按时间线展示版本计划，包括版本状态、任务统计等信息。需要认证，需要 view_versions 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_versions')")
+    @GetMapping("/{projectId}/versions/roadmap")
+    public ApiResponse<VersionRoadmapResponseDTO> getVersionRoadmap(
+            @PathVariable Long projectId) {
+        VersionRoadmapResponseDTO result = projectService.getVersionRoadmap(projectId);
+        return ApiResponse.success(result);
     }
 }

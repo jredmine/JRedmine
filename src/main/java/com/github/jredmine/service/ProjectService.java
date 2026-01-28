@@ -29,6 +29,7 @@ import com.github.jredmine.dto.response.project.VersionProgressResponseDTO;
 import com.github.jredmine.dto.response.project.VersionStatusUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
+import com.github.jredmine.dto.response.project.VersionRoadmapResponseDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.project.ProjectDetailResponseDTO;
 import com.github.jredmine.dto.response.project.ProjectListItemResponseDTO;
@@ -83,6 +84,8 @@ import com.github.jredmine.mapper.user.RoleMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.util.SecurityUtils;
+import lombok.Builder;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -4541,6 +4544,158 @@ public class ProjectService {
         }
         VersionSharing versionSharing = VersionSharing.fromCode(sharing);
         return versionSharing != null ? versionSharing.getDescription() : sharing;
+    }
+
+    /**
+     * 获取项目版本路线图
+     *
+     * @param projectId 项目ID
+     * @return 版本路线图
+     */
+    public VersionRoadmapResponseDTO getVersionRoadmap(Long projectId) {
+        MDC.put("operation", "get_version_roadmap");
+        MDC.put("projectId", String.valueOf(projectId));
+
+        try {
+            log.info("开始查询版本路线图，项目ID: {}", projectId);
+
+            // 验证项目是否存在
+            Project project = projectMapper.selectById(projectId);
+            if (project == null) {
+                log.warn("项目不存在，项目ID: {}", projectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            // 查询项目的所有版本
+            LambdaQueryWrapper<Version> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(Version::getProjectId, projectId.intValue());
+            // 按生效日期升序排序（时间线顺序）
+            queryWrapper.orderByAsc(Version::getEffectiveDate);
+            queryWrapper.orderByAsc(Version::getId);
+            List<Version> versions = versionMapper.selectList(queryWrapper);
+
+            // 统计按状态分组的版本数量
+            Map<String, Long> statusStatistics = versions.stream()
+                    .collect(Collectors.groupingBy(
+                            v -> v.getStatus() != null ? v.getStatus() : "open",
+                            Collectors.counting()));
+
+            // 获取所有版本ID
+            List<Integer> versionIds = versions.stream()
+                    .map(Version::getId)
+                    .collect(Collectors.toList());
+
+            // 批量查询每个版本关联的任务统计
+            Map<Integer, VersionTaskStats> versionTaskStatsMap = new HashMap<>();
+            if (!versionIds.isEmpty()) {
+                LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
+                issueQuery.eq(Issue::getProjectId, projectId)
+                         .in(Issue::getFixedVersionId, versionIds.stream().map(Integer::longValue).collect(Collectors.toList()))
+                         .isNotNull(Issue::getFixedVersionId);
+                List<Issue> allIssues = issueMapper.selectList(issueQuery);
+
+                // 按版本ID分组统计
+                Map<Long, List<Issue>> issuesByVersion = allIssues.stream()
+                        .collect(Collectors.groupingBy(Issue::getFixedVersionId));
+
+                for (Integer versionId : versionIds) {
+                    List<Issue> versionIssues = issuesByVersion.getOrDefault(versionId.longValue(), new ArrayList<>());
+                    long totalCount = versionIssues.size();
+                    long completedCount = versionIssues.stream()
+                            .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() >= 100)
+                            .count();
+                    double completionPercentage = totalCount > 0 ? (completedCount * 100.0 / totalCount) : 0.0;
+
+                    versionTaskStatsMap.put(versionId, VersionTaskStats.builder()
+                            .totalCount(totalCount)
+                            .completedCount(completedCount)
+                            .completionPercentage(completionPercentage)
+                            .build());
+                }
+            }
+
+            // 构建时间线数据
+            LocalDate today = LocalDate.now();
+            List<VersionRoadmapResponseDTO.VersionTimelineItem> timeline = new ArrayList<>();
+            Map<String, List<VersionRoadmapResponseDTO.VersionTimelineItem>> timelineByPeriod = new HashMap<>();
+
+            for (Version version : versions) {
+                VersionTaskStats stats = versionTaskStatsMap.getOrDefault(version.getId(),
+                        VersionTaskStats.builder().totalCount(0L).completedCount(0L).completionPercentage(0.0).build());
+
+                LocalDate effectiveDate = version.getEffectiveDate();
+                LocalDate createdDate = version.getCreatedOn() != null ? version.getCreatedOn().toLocalDate() : null;
+
+                // 计算是否过期（生效日期已过但状态不是closed）
+                boolean isOverdue = effectiveDate != null
+                        && effectiveDate.isBefore(today)
+                        && !"closed".equals(version.getStatus());
+
+                // 计算是否即将到期（7天内到期且状态不是closed）
+                boolean isUpcoming = effectiveDate != null
+                        && !effectiveDate.isBefore(today)
+                        && effectiveDate.isBefore(today.plusDays(7))
+                        && !"closed".equals(version.getStatus());
+
+                // 计算距离生效日期的天数
+                Long daysUntilEffective = null;
+                if (effectiveDate != null) {
+                    daysUntilEffective = ChronoUnit.DAYS.between(today, effectiveDate);
+                }
+
+                VersionRoadmapResponseDTO.VersionTimelineItem item = VersionRoadmapResponseDTO.VersionTimelineItem.builder()
+                        .versionId(version.getId())
+                        .versionName(version.getName())
+                        .description(version.getDescription())
+                        .effectiveDate(effectiveDate)
+                        .status(version.getStatus() != null ? version.getStatus() : "open")
+                        .statusDescription(getVersionStatusName(version.getStatus()))
+                        .issueCount(stats.totalCount)
+                        .completedIssueCount(stats.completedCount)
+                        .completionPercentage(Math.round(stats.completionPercentage * 100.0) / 100.0)
+                        .createdDate(createdDate)
+                        .isOverdue(isOverdue)
+                        .isUpcoming(isUpcoming)
+                        .daysUntilEffective(daysUntilEffective)
+                        .build();
+
+                timeline.add(item);
+
+                // 按时间段分组（按月份）
+                if (effectiveDate != null) {
+                    String periodKey = effectiveDate.getYear() + "-" + String.format("%02d", effectiveDate.getMonthValue());
+                    timelineByPeriod.computeIfAbsent(periodKey, k -> new ArrayList<>()).add(item);
+                } else {
+                    // 没有生效日期的版本归入"未计划"
+                    timelineByPeriod.computeIfAbsent("未计划", k -> new ArrayList<>()).add(item);
+                }
+            }
+
+            log.info("版本路线图查询成功，项目ID: {}, 版本总数: {}", projectId, versions.size());
+
+            return VersionRoadmapResponseDTO.builder()
+                    .projectId(projectId)
+                    .projectName(project.getName())
+                    .totalVersions((long) versions.size())
+                    .statusStatistics(statusStatistics)
+                    .timeline(timeline)
+                    .timelineByPeriod(timelineByPeriod)
+                    .build();
+        } finally {
+            MDC.remove("operation");
+            MDC.remove("projectId");
+        }
+    }
+
+    /**
+     * 版本任务统计内部类
+     */
+    @lombok.Data
+    @lombok.Builder
+    private static class VersionTaskStats {
+        private Long totalCount;
+        private Long completedCount;
+        private Double completionPercentage;
     }
 
     /**
