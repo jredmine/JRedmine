@@ -9,11 +9,15 @@ import com.github.jredmine.dto.response.report.BurndownReportResponseDTO;
 import com.github.jredmine.dto.response.report.UserWorkloadReportResponseDTO;
 import com.github.jredmine.dto.response.timeentry.TimeEntryReportResponseDTO;
 import com.github.jredmine.service.ProjectService;
+import com.github.jredmine.service.ReportExportService;
 import com.github.jredmine.service.ReportService;
 import com.github.jredmine.service.TimeEntryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -34,12 +38,14 @@ public class ReportController {
     private final ProjectService projectService;
     private final TimeEntryService timeEntryService;
     private final ReportService reportService;
+    private final ReportExportService reportExportService;
 
     public ReportController(ProjectService projectService, TimeEntryService timeEntryService,
-            ReportService reportService) {
+            ReportService reportService, ReportExportService reportExportService) {
         this.projectService = projectService;
         this.timeEntryService = timeEntryService;
         this.reportService = reportService;
+        this.reportExportService = reportExportService;
     }
 
     @Operation(summary = "获取项目统计报表", description = "获取指定项目的统计报表，包含任务数、完成率、工时等。需要认证，项目成员或系统管理员可访问。", security = @SecurityRequirement(name = "bearerAuth"))
@@ -75,5 +81,95 @@ public class ReportController {
             @ModelAttribute BurndownReportRequestDTO request) {
         BurndownReportResponseDTO result = reportService.getBurndownReport(request);
         return ApiResponse.success(result);
+    }
+
+    // ==================== 报表导出 ====================
+
+    @Operation(summary = "导出项目统计报表(Excel)", description = "将项目统计报表导出为 Excel 文件。需要认证。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("isAuthenticated()")
+    @GetMapping("/projects/{projectId}/export/excel")
+    public ResponseEntity<byte[]> exportProjectReportToExcel(@PathVariable Long projectId) {
+        byte[] data = reportExportService.exportProjectReportToExcel(projectId);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "project_statistics.xlsx");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出项目统计报表(CSV)", description = "将项目统计报表导出为 CSV 文件。需要认证。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("isAuthenticated()")
+    @GetMapping("/projects/{projectId}/export/csv")
+    public ResponseEntity<byte[]> exportProjectReportToCSV(@PathVariable Long projectId) {
+        byte[] data = reportExportService.exportProjectReportToCSV(projectId);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv;charset=UTF-8"));
+        headers.setContentDispositionFormData("attachment", "project_statistics.csv");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出工时统计报表(Excel)", description = "将工时统计报表导出为 Excel 文件。参数同工时统计接口。需要 view_time_entries 或管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    @GetMapping("/time-entries/export/excel")
+    public ResponseEntity<byte[]> exportTimeEntryReportToExcel(@ModelAttribute TimeEntryReportRequestDTO request) {
+        byte[] data = reportExportService.exportTimeEntryReportToExcel(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "time_entry_report.xlsx");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出工时统计报表(CSV)", description = "将工时统计报表导出为 CSV 文件。需要 view_time_entries 或管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_time_entries')")
+    @GetMapping("/time-entries/export/csv")
+    public ResponseEntity<byte[]> exportTimeEntryReportToCSV(@ModelAttribute TimeEntryReportRequestDTO request) {
+        byte[] data = reportExportService.exportTimeEntryReportToCSV(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv;charset=UTF-8"));
+        headers.setContentDispositionFormData("attachment", "time_entry_report.csv");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出用户工作量报表(Excel)", description = "将用户工作量统计报表导出为 Excel 文件。参数同用户工作量接口。需要 view_issues 或 view_time_entries 或管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues') or authentication.principal.hasPermission('view_time_entries')")
+    @GetMapping("/users/workload/export/excel")
+    public ResponseEntity<byte[]> exportUserWorkloadReportToExcel(@ModelAttribute UserWorkloadReportRequestDTO request) {
+        byte[] data = reportExportService.exportUserWorkloadReportToExcel(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "user_workload_report.xlsx");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出用户工作量报表(CSV)", description = "将用户工作量统计报表导出为 CSV 文件。需要 view_issues 或 view_time_entries 或管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues') or authentication.principal.hasPermission('view_time_entries')")
+    @GetMapping("/users/workload/export/csv")
+    public ResponseEntity<byte[]> exportUserWorkloadReportToCSV(@ModelAttribute UserWorkloadReportRequestDTO request) {
+        byte[] data = reportExportService.exportUserWorkloadReportToCSV(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv;charset=UTF-8"));
+        headers.setContentDispositionFormData("attachment", "user_workload_report.csv");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出燃尽图报表(Excel)", description = "将燃尽图报表导出为 Excel 文件。参数 projectId 必填，versionId 可选。需要 view_issues 或管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/burndown/export/excel")
+    public ResponseEntity<byte[]> exportBurndownReportToExcel(@ModelAttribute BurndownReportRequestDTO request) {
+        byte[] data = reportExportService.exportBurndownReportToExcel(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "burndown_report.xlsx");
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出燃尽图报表(CSV)", description = "将燃尽图报表导出为 CSV 文件。需要 view_issues 或管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/burndown/export/csv")
+    public ResponseEntity<byte[]> exportBurndownReportToCSV(@ModelAttribute BurndownReportRequestDTO request) {
+        byte[] data = reportExportService.exportBurndownReportToCSV(request);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv;charset=UTF-8"));
+        headers.setContentDispositionFormData("attachment", "burndown_report.csv");
+        return ResponseEntity.ok().headers(headers).body(data);
     }
 }
