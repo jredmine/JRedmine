@@ -1,7 +1,9 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.github.jredmine.dto.request.report.BurndownReportRequestDTO;
 import com.github.jredmine.dto.request.report.UserWorkloadReportRequestDTO;
+import com.github.jredmine.dto.response.report.BurndownReportResponseDTO;
 import com.github.jredmine.dto.response.report.UserWorkloadReportResponseDTO;
 import com.github.jredmine.entity.Issue;
 import com.github.jredmine.entity.IssueStatus;
@@ -9,12 +11,14 @@ import com.github.jredmine.entity.Member;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.TimeEntry;
 import com.github.jredmine.entity.User;
+import com.github.jredmine.entity.Version;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.TimeEntryMapper;
 import com.github.jredmine.mapper.issue.IssueMapper;
 import com.github.jredmine.mapper.project.MemberMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
+import com.github.jredmine.mapper.project.VersionMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.mapper.workflow.IssueStatusMapper;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +26,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -45,6 +51,7 @@ public class ReportService {
     private final TimeEntryMapper timeEntryMapper;
     private final MemberMapper memberMapper;
     private final ProjectMapper projectMapper;
+    private final VersionMapper versionMapper;
     private final IssueStatusMapper issueStatusMapper;
 
     /**
@@ -146,6 +153,128 @@ public class ReportService {
                     .summary(summary)
                     .items(items)
                     .queryDescription(buildQueryDescription(request))
+                    .build();
+        } finally {
+            MDC.remove("operation");
+        }
+    }
+
+    /**
+     * 燃尽图报表
+     */
+    public BurndownReportResponseDTO getBurndownReport(BurndownReportRequestDTO request) {
+        MDC.put("operation", "get_burndown_report");
+        try {
+            if (request.getProjectId() == null) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "项目ID不能为空");
+            }
+            Project project = projectMapper.selectById(request.getProjectId());
+            if (project == null) {
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+
+            LambdaQueryWrapper<Issue> scopeWrapper = new LambdaQueryWrapper<>();
+            scopeWrapper.eq(Issue::getProjectId, request.getProjectId());
+            if (request.getVersionId() != null) {
+                scopeWrapper.eq(Issue::getFixedVersionId, request.getVersionId().longValue());
+            }
+            List<Issue> scopeIssues = issueMapper.selectList(scopeWrapper);
+
+            Version version = null;
+            if (request.getVersionId() != null) {
+                version = versionMapper.selectById(request.getVersionId());
+                if (version == null || !version.getProjectId().equals(request.getProjectId().intValue())) {
+                    throw new BusinessException(ResultCode.PARAM_INVALID, "版本不存在或不属于该项目");
+                }
+            }
+
+            long totalIssues = scopeIssues.size();
+            long completedIssues = scopeIssues.stream()
+                    .filter(i -> i.getClosedOn() != null)
+                    .count();
+            long remainingIssues = totalIssues - completedIssues;
+
+            LocalDate startDate;
+            LocalDate endDate;
+            if (version != null) {
+                endDate = version.getEffectiveDate() != null ? version.getEffectiveDate() : LocalDate.now();
+                LocalDate minStart = scopeIssues.stream()
+                        .filter(i -> i.getStartDate() != null)
+                        .map(Issue::getStartDate)
+                        .min(LocalDate::compareTo)
+                        .orElse(endDate.minusDays(30));
+                startDate = minStart.isBefore(endDate) ? minStart : endDate.minusDays(30);
+            } else {
+                if (scopeIssues.isEmpty()) {
+                    endDate = LocalDate.now();
+                    startDate = endDate.minusDays(30);
+                } else {
+                    endDate = scopeIssues.stream()
+                            .filter(i -> i.getDueDate() != null)
+                            .map(Issue::getDueDate)
+                            .max(LocalDate::compareTo)
+                            .orElse(LocalDate.now());
+                    if (endDate.isAfter(LocalDate.now())) {
+                        endDate = LocalDate.now();
+                    }
+                    LocalDate minStart = scopeIssues.stream()
+                            .filter(i -> i.getStartDate() != null)
+                            .map(Issue::getStartDate)
+                            .min(LocalDate::compareTo)
+                            .orElse(endDate.minusDays(30));
+                    startDate = minStart.isBefore(endDate) ? minStart : endDate.minusDays(30);
+                }
+            }
+
+            long totalDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
+            if (totalDays <= 0) {
+                totalDays = 1;
+            }
+
+            List<BurndownReportResponseDTO.BurndownPoint> idealLine = new ArrayList<>();
+            List<BurndownReportResponseDTO.BurndownPoint> actualLine = new ArrayList<>();
+
+            for (long i = 0; i <= ChronoUnit.DAYS.between(startDate, endDate); i++) {
+                LocalDate d = startDate.plusDays(i);
+                long idealRemaining = totalIssues > 0
+                        ? Math.max(0, totalIssues - (totalIssues * (i + 1) / totalDays))
+                        : 0;
+                idealLine.add(BurndownReportResponseDTO.BurndownPoint.builder()
+                        .date(d)
+                        .remaining(idealRemaining)
+                        .completedThatDay(null)
+                        .build());
+
+                long remaining = scopeIssues.stream()
+                        .filter(issue -> issue.getClosedOn() == null
+                                || issue.getClosedOn().toLocalDate().isAfter(d))
+                        .count();
+                long completedThatDay = scopeIssues.stream()
+                        .filter(issue -> issue.getClosedOn() != null
+                                && issue.getClosedOn().toLocalDate().equals(d))
+                        .count();
+                actualLine.add(BurndownReportResponseDTO.BurndownPoint.builder()
+                        .date(d)
+                        .remaining(remaining)
+                        .completedThatDay(completedThatDay)
+                        .build());
+            }
+
+            log.info("燃尽图报表生成完成: projectId={}, versionId={}, totalIssues={}, remaining={}",
+                    request.getProjectId(), request.getVersionId(), totalIssues, remainingIssues);
+
+            return BurndownReportResponseDTO.builder()
+                    .projectId(request.getProjectId())
+                    .projectName(project.getName())
+                    .versionId(request.getVersionId())
+                    .versionName(version != null ? version.getName() : null)
+                    .startDate(startDate)
+                    .endDate(endDate)
+                    .totalIssues(totalIssues)
+                    .completedIssues(completedIssues)
+                    .remainingIssues(remainingIssues)
+                    .idealLine(idealLine)
+                    .actualLine(actualLine)
                     .build();
         } finally {
             MDC.remove("operation");

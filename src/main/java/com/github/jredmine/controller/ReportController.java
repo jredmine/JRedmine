@@ -1,9 +1,11 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.report.BurndownReportRequestDTO;
 import com.github.jredmine.dto.request.report.UserWorkloadReportRequestDTO;
 import com.github.jredmine.dto.request.timeentry.TimeEntryReportRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.project.ProjectStatisticsResponseDTO;
+import com.github.jredmine.dto.response.report.BurndownReportResponseDTO;
 import com.github.jredmine.dto.response.report.UserWorkloadReportResponseDTO;
 import com.github.jredmine.dto.response.timeentry.TimeEntryReportResponseDTO;
 import com.github.jredmine.service.ProjectService;
@@ -63,6 +65,15 @@ public class ReportController {
     public ApiResponse<UserWorkloadReportResponseDTO> getUserWorkloadReport(
             @ModelAttribute UserWorkloadReportRequestDTO request) {
         UserWorkloadReportResponseDTO result = reportService.getUserWorkloadReport(request);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取燃尽图报表", description = "获取项目或版本的燃尽图数据，包含理想燃尽线和实际燃尽线（按剩余任务数）。支持按项目或按版本（fixed_version_id）统计。需要认证，需要 view_issues 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/burndown")
+    public ApiResponse<BurndownReportResponseDTO> getBurndownReport(
+            @ModelAttribute BurndownReportRequestDTO request) {
+        BurndownReportResponseDTO result = reportService.getBurndownReport(request);
         return ApiResponse.success(result);
     }
 }
