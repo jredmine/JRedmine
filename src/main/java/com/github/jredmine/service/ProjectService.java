@@ -2091,6 +2091,7 @@ public class ProjectService {
             ProjectStatisticsResponseDTO statistics = new ProjectStatisticsResponseDTO();
             statistics.setProjectId(projectId);
             statistics.setProjectName(project.getName());
+            statistics.setProjectStatus(project.getStatus());
             statistics.setLastUpdatedOn(project.getUpdatedOn());
 
             // 统计成员数量
@@ -2122,31 +2123,103 @@ public class ProjectService {
             statistics.setTrackerCount(trackerCount.intValue());
             log.debug("项目跟踪器数量: {}", trackerCount);
 
+            // 统计版本数量
+            LambdaQueryWrapper<Version> versionQuery = new LambdaQueryWrapper<>();
+            versionQuery.eq(Version::getProjectId, projectId.intValue());
+            Long versionCount = versionMapper.selectCount(versionQuery);
+            statistics.setVersionCount(versionCount.intValue());
+            log.debug("项目版本数量: {}", versionCount);
+
             // 任务统计
             try {
                 IssueStatisticsResponseDTO issueStatistics = issueService.getIssueStatistics(projectId);
                 if (issueStatistics != null) {
-                    ProjectStatisticsResponseDTO.IssueStatistics projectIssueStatistics = 
-                            new ProjectStatisticsResponseDTO.IssueStatistics();
+                    ProjectStatisticsResponseDTO.IssueStatistics projectIssueStatistics = new ProjectStatisticsResponseDTO.IssueStatistics();
                     projectIssueStatistics.setTotalCount(issueStatistics.getTotalCount());
+                    int total = issueStatistics.getTotalCount() != null ? issueStatistics.getTotalCount() : 0;
+                    int completed = issueStatistics.getCompletedCount() != null ? issueStatistics.getCompletedCount()
+                            : 0;
+                    int inProgress = issueStatistics.getInProgressCount() != null ? issueStatistics.getInProgressCount()
+                            : 0;
+                    projectIssueStatistics.setPendingCount(Math.max(0, total - completed - inProgress));
                     projectIssueStatistics.setInProgressCount(issueStatistics.getInProgressCount());
                     projectIssueStatistics.setCompletedCount(issueStatistics.getCompletedCount());
                     projectIssueStatistics.setCompletionRate(issueStatistics.getCompletionRate());
+                    // 按状态统计
+                    if (issueStatistics.getStatusStatistics() != null) {
+                        List<ProjectStatisticsResponseDTO.StatusCountItem> byStatus = new ArrayList<>();
+                        for (IssueStatisticsResponseDTO.StatusStatistics s : issueStatistics.getStatusStatistics()) {
+                            ProjectStatisticsResponseDTO.StatusCountItem item = new ProjectStatisticsResponseDTO.StatusCountItem();
+                            item.setStatusId(s.getStatusId());
+                            item.setStatusName(s.getStatusName());
+                            item.setCount(s.getCount());
+                            item.setIsClosed(s.getIsClosed());
+                            byStatus.add(item);
+                        }
+                        projectIssueStatistics.setByStatus(byStatus);
+                    }
+                    // 按跟踪器统计
+                    if (issueStatistics.getTrackerStatistics() != null) {
+                        List<ProjectStatisticsResponseDTO.TrackerCountItem> byTracker = new ArrayList<>();
+                        for (IssueStatisticsResponseDTO.TrackerStatistics t : issueStatistics.getTrackerStatistics()) {
+                            ProjectStatisticsResponseDTO.TrackerCountItem item = new ProjectStatisticsResponseDTO.TrackerCountItem();
+                            item.setTrackerId(t.getTrackerId());
+                            item.setTrackerName(t.getTrackerName());
+                            item.setCount(t.getCount());
+                            byTracker.add(item);
+                        }
+                        projectIssueStatistics.setByTracker(byTracker);
+                    }
                     statistics.setIssueStatistics(projectIssueStatistics);
-                    log.debug("项目任务统计信息已填充，项目ID: {}, 任务总数: {}", 
-                            projectId, issueStatistics.getTotalCount());
+                    log.debug("项目任务统计信息已填充，项目ID: {}, 任务总数: {}", projectId, total);
                 } else {
                     statistics.setIssueStatistics(null);
                 }
             } catch (Exception e) {
-                // 任务统计获取失败不应该影响项目统计，只记录警告日志
                 log.warn("获取项目任务统计失败，项目ID: {}", projectId, e);
                 statistics.setIssueStatistics(null);
             }
 
-            // 工时统计（暂不支持，返回null）
-            // TODO: 等工时管理模块实现后，添加工时统计逻辑
-            statistics.setTimeEntryStatistics(null);
+            // 工时统计
+            try {
+                LambdaQueryWrapper<TimeEntry> timeEntryQuery = new LambdaQueryWrapper<>();
+                timeEntryQuery.eq(TimeEntry::getProjectId, projectId).isNotNull(TimeEntry::getHours);
+                List<TimeEntry> timeEntries = timeEntryMapper.selectList(timeEntryQuery);
+                int entryCount = timeEntries.size();
+                double totalHours = timeEntries.stream()
+                        .filter(te -> te.getHours() != null)
+                        .mapToDouble(TimeEntry::getHours)
+                        .sum();
+                LocalDate now = LocalDate.now();
+                int currentYear = now.getYear();
+                int currentMonth = now.getMonthValue();
+                java.time.temporal.WeekFields weekFields = java.time.temporal.WeekFields
+                        .of(java.util.Locale.getDefault());
+                int currentWeek = now.get(weekFields.weekOfWeekBasedYear());
+                int currentWeekYear = now.get(weekFields.weekBasedYear());
+                double monthlyHours = timeEntries.stream()
+                        .filter(te -> te.getHours() != null && te.getSpentOn() != null
+                                && te.getSpentOn().getYear() == currentYear
+                                && te.getSpentOn().getMonthValue() == currentMonth)
+                        .mapToDouble(TimeEntry::getHours)
+                        .sum();
+                double weeklyHours = timeEntries.stream()
+                        .filter(te -> te.getHours() != null && te.getSpentOn() != null
+                                && te.getSpentOn().get(weekFields.weekOfWeekBasedYear()) == currentWeek
+                                && te.getSpentOn().get(weekFields.weekBasedYear()) == currentWeekYear)
+                        .mapToDouble(TimeEntry::getHours)
+                        .sum();
+                ProjectStatisticsResponseDTO.TimeEntryStatistics timeStats = new ProjectStatisticsResponseDTO.TimeEntryStatistics();
+                timeStats.setTotalHours(Math.round(totalHours * 100.0) / 100.0);
+                timeStats.setMonthlyHours(Math.round(monthlyHours * 100.0) / 100.0);
+                timeStats.setWeeklyHours(Math.round(weeklyHours * 100.0) / 100.0);
+                timeStats.setEntryCount(entryCount);
+                statistics.setTimeEntryStatistics(timeStats);
+                log.debug("项目工时统计已填充，项目ID: {}, 总工时: {}", projectId, totalHours);
+            } catch (Exception e) {
+                log.warn("获取项目工时统计失败，项目ID: {}", projectId, e);
+                statistics.setTimeEntryStatistics(null);
+            }
 
             log.info("项目统计信息查询成功，项目ID: {}", projectId);
 
@@ -2925,8 +2998,9 @@ public class ProjectService {
             version.setEffectiveDate(requestDTO.getEffectiveDate());
             version.setWikiPageTitle(requestDTO.getWikiPageTitle());
             version.setStatus(requestDTO.getStatus() != null ? requestDTO.getStatus() : VersionStatus.OPEN.getCode());
-            version.setSharing(requestDTO.getSharing() != null ? requestDTO.getSharing() : VersionSharing.NONE.getCode());
-            
+            version.setSharing(
+                    requestDTO.getSharing() != null ? requestDTO.getSharing() : VersionSharing.NONE.getCode());
+
             // 设置创建时间和更新时间
             java.time.LocalDateTime now = java.time.LocalDateTime.now();
             version.setCreatedOn(now);
@@ -3200,12 +3274,12 @@ public class ProjectService {
             // 查询版本关联的所有任务
             LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
             issueQuery.eq(Issue::getFixedVersionId, versionId.longValue())
-                     .eq(Issue::getProjectId, projectId);
+                    .eq(Issue::getProjectId, projectId);
             List<Issue> issues = issueMapper.selectList(issueQuery);
 
             // 统计任务数量
             long totalIssues = issues.size();
-            
+
             // 获取所有状态信息（用于状态名称映射）
             List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
             Map<Integer, String> statusMap = allStatuses.stream()
@@ -3217,11 +3291,11 @@ public class ProjectService {
             long inProgressIssues = 0;
             long pendingIssues = 0;
             long closedIssues = 0;
-            
+
             for (Issue issue : issues) {
                 String statusName = statusMap.getOrDefault(issue.getStatusId(), "未知");
                 issuesByStatus.merge(statusName, 1L, Long::sum);
-                
+
                 // 判断任务状态分类
                 if (issue.getDoneRatio() != null && issue.getDoneRatio() >= 100) {
                     completedIssues++;
@@ -3230,7 +3304,7 @@ public class ProjectService {
                 } else {
                     pendingIssues++;
                 }
-                
+
                 // 检查是否为关闭状态（通常状态ID对应关闭状态）
                 IssueStatus status = allStatuses.stream()
                         .filter(s -> s.getId().equals(issue.getStatusId()))
@@ -3260,19 +3334,19 @@ public class ProjectService {
                 List<Long> issueIds = issues.stream().map(Issue::getId).collect(Collectors.toList());
                 LambdaQueryWrapper<TimeEntry> timeEntryQuery = new LambdaQueryWrapper<>();
                 timeEntryQuery.eq(TimeEntry::getProjectId, projectId)
-                             .in(TimeEntry::getIssueId, issueIds)
-                             .isNotNull(TimeEntry::getHours);
+                        .in(TimeEntry::getIssueId, issueIds)
+                        .isNotNull(TimeEntry::getHours);
                 List<TimeEntry> timeEntries = timeEntryMapper.selectList(timeEntryQuery);
-                
+
                 spentHours = timeEntries.stream()
                         .filter(te -> te.getHours() != null)
                         .mapToDouble(TimeEntry::getHours)
                         .sum();
             }
-            
+
             double remainingHours = Math.max(0, estimatedHours - spentHours);
-            double hoursCompletionPercentage = estimatedHours > 0 
-                    ? (spentHours / estimatedHours) * 100 
+            double hoursCompletionPercentage = estimatedHours > 0
+                    ? (spentHours / estimatedHours) * 100
                     : 0.0;
 
             // 时间统计
@@ -3289,26 +3363,24 @@ public class ProjectService {
                     .orElse(null);
 
             // 预计完成时间（使用版本生效日期或最晚截止日期）
-            LocalDate estimatedCompletionDate = version.getEffectiveDate() != null 
-                    ? version.getEffectiveDate() 
+            LocalDate estimatedCompletionDate = version.getEffectiveDate() != null
+                    ? version.getEffectiveDate()
                     : latestDueDate;
 
             // 按跟踪器统计
             Map<String, Long> issuesByTracker = issues.stream()
                     .collect(Collectors.groupingBy(
-                        issue -> {
-                            Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
-                            return tracker != null ? tracker.getName() : "未知";
-                        },
-                        Collectors.counting()
-                    ));
+                            issue -> {
+                                Tracker tracker = trackerMapper.selectById(issue.getTrackerId());
+                                return tracker != null ? tracker.getName() : "未知";
+                            },
+                            Collectors.counting()));
 
             // 按优先级统计（需要获取优先级名称）
             Map<String, Long> issuesByPriority = issues.stream()
                     .collect(Collectors.groupingBy(
-                        issue -> "优先级" + issue.getPriorityId(),
-                        Collectors.counting()
-                    ));
+                            issue -> "优先级" + issue.getPriorityId(),
+                            Collectors.counting()));
 
             log.info("版本统计查询成功，版本ID: {}, 任务总数: {}", versionId, totalIssues);
 
@@ -3344,12 +3416,13 @@ public class ProjectService {
     /**
      * 获取版本关联的任务列表
      *
-     * @param projectId 项目ID
-     * @param versionId 版本ID
+     * @param projectId  项目ID
+     * @param versionId  版本ID
      * @param requestDTO 查询请求
      * @return 任务列表
      */
-    public PageResponse<IssueListItemResponseDTO> getVersionIssues(Long projectId, Integer versionId, VersionIssuesRequestDTO requestDTO) {
+    public PageResponse<IssueListItemResponseDTO> getVersionIssues(Long projectId, Integer versionId,
+            VersionIssuesRequestDTO requestDTO) {
         MDC.put("operation", "get_version_issues");
         MDC.put("projectId", String.valueOf(projectId));
         MDC.put("versionId", String.valueOf(versionId));
@@ -3385,10 +3458,10 @@ public class ProjectService {
 
             // 构建查询条件
             LambdaQueryWrapper<Issue> queryWrapper = new LambdaQueryWrapper<>();
-            
+
             // 固定版本ID和项目ID
             queryWrapper.eq(Issue::getFixedVersionId, versionId.longValue())
-                       .eq(Issue::getProjectId, projectId);
+                    .eq(Issue::getProjectId, projectId);
 
             // 状态筛选
             if (requestDTO.getStatusId() != null && requestDTO.getStatusId() > 0) {
@@ -3432,8 +3505,8 @@ public class ProjectService {
             if (requestDTO.getKeyword() != null && !requestDTO.getKeyword().trim().isEmpty()) {
                 queryWrapper.and(wrapper -> {
                     wrapper.like(Issue::getSubject, requestDTO.getKeyword().trim())
-                           .or()
-                           .like(Issue::getDescription, requestDTO.getKeyword().trim());
+                            .or()
+                            .like(Issue::getDescription, requestDTO.getKeyword().trim());
                 });
             }
 
@@ -3590,8 +3663,8 @@ public class ProjectService {
         try {
             LambdaQueryWrapper<Enumeration> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.eq(Enumeration::getId, priorityId)
-                       .eq(Enumeration::getType, "IssuePriority")
-                       .eq(Enumeration::getActive, true);
+                    .eq(Enumeration::getType, "IssuePriority")
+                    .eq(Enumeration::getActive, true);
             Enumeration enumeration = enumerationMapper.selectOne(queryWrapper);
 
             return enumeration != null ? enumeration.getName() : null;
@@ -3609,10 +3682,10 @@ public class ProjectService {
             return null;
         }
         if ((user.getFirstname() != null && !user.getFirstname().isEmpty()) ||
-            (user.getLastname() != null && !user.getLastname().isEmpty())) {
+                (user.getLastname() != null && !user.getLastname().isEmpty())) {
             return (user.getFirstname() != null ? user.getFirstname() : "") +
-                   " " +
-                   (user.getLastname() != null ? user.getLastname() : "");
+                    " " +
+                    (user.getLastname() != null ? user.getLastname() : "");
         }
         return user.getLogin();
     }
@@ -3620,8 +3693,8 @@ public class ProjectService {
     /**
      * 批量关联任务到版本
      *
-     * @param projectId 项目ID
-     * @param versionId 版本ID
+     * @param projectId  项目ID
+     * @param versionId  版本ID
      * @param requestDTO 批量关联请求
      * @return 批量关联结果
      */
@@ -3633,7 +3706,7 @@ public class ProjectService {
         MDC.put("versionId", String.valueOf(versionId));
 
         try {
-            log.info("开始批量关联任务到版本，项目ID: {}, 版本ID: {}, 任务数量: {}", 
+            log.info("开始批量关联任务到版本，项目ID: {}, 版本ID: {}, 任务数量: {}",
                     projectId, versionId, requestDTO.getIssueIds().size());
 
             // 验证项目是否存在
@@ -3687,14 +3760,14 @@ public class ProjectService {
 
             for (Issue issue : issues) {
                 Long issueId = issue.getId();
-                
+
                 try {
                     // 验证任务是否属于该项目
                     if (!issue.getProjectId().equals(projectId)) {
                         String errorMsg = "任务不属于该项目";
                         failIssueIds.add(issueId);
                         errors.put(issueId, errorMsg);
-                        log.warn("任务不属于该项目，任务ID: {}, 任务项目ID: {}, 请求项目ID: {}", 
+                        log.warn("任务不属于该项目，任务ID: {}, 任务项目ID: {}, 请求项目ID: {}",
                                 issueId, issue.getProjectId(), projectId);
                         continue;
                     }
@@ -3705,7 +3778,7 @@ public class ProjectService {
                             String errorMsg = "无权限编辑任务";
                             failIssueIds.add(issueId);
                             errors.put(issueId, errorMsg);
-                            log.warn("用户无权限编辑任务，任务ID: {}, 项目ID: {}, 用户ID: {}", 
+                            log.warn("用户无权限编辑任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
                                     issueId, projectId, currentUserId);
                             continue;
                         }
@@ -3714,7 +3787,7 @@ public class ProjectService {
                     // 更新任务的fixed_version_id
                     issue.setFixedVersionId(versionId.longValue());
                     issue.setUpdatedOn(java.time.LocalDateTime.now());
-                    
+
                     int updateResult = issueMapper.updateById(issue);
                     if (updateResult > 0) {
                         successIssueIds.add(issueId);
@@ -3743,7 +3816,7 @@ public class ProjectService {
                 }
             }
 
-            log.info("批量关联任务到版本完成，项目ID: {}, 版本ID: {}, 成功: {}, 失败: {}", 
+            log.info("批量关联任务到版本完成，项目ID: {}, 版本ID: {}, 成功: {}, 失败: {}",
                     projectId, versionId, successCount, failIssueIds.size());
 
             return VersionIssuesBatchAssignResponseDTO.builder()
@@ -3763,8 +3836,8 @@ public class ProjectService {
     /**
      * 批量取消任务与版本的关联
      *
-     * @param projectId 项目ID
-     * @param versionId 版本ID
+     * @param projectId  项目ID
+     * @param versionId  版本ID
      * @param requestDTO 批量取消关联请求
      * @return 批量取消关联结果
      */
@@ -3776,7 +3849,7 @@ public class ProjectService {
         MDC.put("versionId", String.valueOf(versionId));
 
         try {
-            log.info("开始批量取消任务与版本关联，项目ID: {}, 版本ID: {}, 任务数量: {}", 
+            log.info("开始批量取消任务与版本关联，项目ID: {}, 版本ID: {}, 任务数量: {}",
                     projectId, versionId, requestDTO.getIssueIds().size());
 
             // 验证项目是否存在
@@ -3830,14 +3903,14 @@ public class ProjectService {
 
             for (Issue issue : issues) {
                 Long issueId = issue.getId();
-                
+
                 try {
                     // 验证任务是否属于该项目
                     if (!issue.getProjectId().equals(projectId)) {
                         String errorMsg = "任务不属于该项目";
                         failIssueIds.add(issueId);
                         errors.put(issueId, errorMsg);
-                        log.warn("任务不属于该项目，任务ID: {}, 任务项目ID: {}, 请求项目ID: {}", 
+                        log.warn("任务不属于该项目，任务ID: {}, 任务项目ID: {}, 请求项目ID: {}",
                                 issueId, issue.getProjectId(), projectId);
                         continue;
                     }
@@ -3847,7 +3920,7 @@ public class ProjectService {
                         String errorMsg = "任务未关联到该版本";
                         failIssueIds.add(issueId);
                         errors.put(issueId, errorMsg);
-                        log.warn("任务未关联到该版本，任务ID: {}, 任务版本ID: {}, 请求版本ID: {}", 
+                        log.warn("任务未关联到该版本，任务ID: {}, 任务版本ID: {}, 请求版本ID: {}",
                                 issueId, issue.getFixedVersionId(), versionId);
                         continue;
                     }
@@ -3858,7 +3931,7 @@ public class ProjectService {
                             String errorMsg = "无权限编辑任务";
                             failIssueIds.add(issueId);
                             errors.put(issueId, errorMsg);
-                            log.warn("用户无权限编辑任务，任务ID: {}, 项目ID: {}, 用户ID: {}", 
+                            log.warn("用户无权限编辑任务，任务ID: {}, 项目ID: {}, 用户ID: {}",
                                     issueId, projectId, currentUserId);
                             continue;
                         }
@@ -3868,9 +3941,9 @@ public class ProjectService {
                     // 使用LambdaUpdateWrapper显式设置null值，因为MyBatis-Plus的updateById默认不会更新null值
                     LambdaUpdateWrapper<Issue> updateWrapper = new LambdaUpdateWrapper<>();
                     updateWrapper.eq(Issue::getId, issueId)
-                                .set(Issue::getFixedVersionId, null)
-                                .set(Issue::getUpdatedOn, java.time.LocalDateTime.now());
-                    
+                            .set(Issue::getFixedVersionId, null)
+                            .set(Issue::getUpdatedOn, java.time.LocalDateTime.now());
+
                     int updateResult = issueMapper.update(null, updateWrapper);
                     if (updateResult > 0) {
                         successIssueIds.add(issueId);
@@ -3899,7 +3972,7 @@ public class ProjectService {
                 }
             }
 
-            log.info("批量取消任务与版本关联完成，项目ID: {}, 版本ID: {}, 成功: {}, 失败: {}", 
+            log.info("批量取消任务与版本关联完成，项目ID: {}, 版本ID: {}, 成功: {}, 失败: {}",
                     projectId, versionId, successCount, failIssueIds.size());
 
             return VersionIssuesBatchUnassignResponseDTO.builder()
@@ -3955,7 +4028,7 @@ public class ProjectService {
             // 查询版本关联的所有任务
             LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
             issueQuery.eq(Issue::getFixedVersionId, versionId.longValue())
-                     .eq(Issue::getProjectId, projectId);
+                    .eq(Issue::getProjectId, projectId);
             List<Issue> issues = issueMapper.selectList(issueQuery);
 
             // 获取所有状态信息
@@ -3993,7 +4066,7 @@ public class ProjectService {
             for (Map.Entry<Integer, List<Issue>> entry : issuesByStatus.entrySet()) {
                 IssueStatus status = statusMap.get(entry.getKey());
                 String statusName = status != null ? status.getName() : "未知";
-                
+
                 List<Issue> statusIssues = entry.getValue();
                 double avgDoneRatio = statusIssues.stream()
                         .filter(i -> i.getDoneRatio() != null)
@@ -4047,7 +4120,7 @@ public class ProjectService {
                 LocalDate today = LocalDate.now();
                 elapsedDays = ChronoUnit.DAYS.between(startDate, today);
                 remainingDays = ChronoUnit.DAYS.between(today, estimatedCompletionDate);
-                
+
                 long totalDays = ChronoUnit.DAYS.between(startDate, estimatedCompletionDate);
                 if (totalDays > 0) {
                     timeProgress = Math.min(100.0, Math.max(0.0, (elapsedDays.doubleValue() / totalDays) * 100.0));
@@ -4085,10 +4158,10 @@ public class ProjectService {
             if (!issueIds.isEmpty()) {
                 LambdaQueryWrapper<TimeEntry> timeEntryQuery = new LambdaQueryWrapper<>();
                 timeEntryQuery.eq(TimeEntry::getProjectId, projectId)
-                             .in(TimeEntry::getIssueId, issueIds)
-                             .isNotNull(TimeEntry::getHours);
+                        .in(TimeEntry::getIssueId, issueIds)
+                        .isNotNull(TimeEntry::getHours);
                 List<TimeEntry> timeEntries = timeEntryMapper.selectList(timeEntryQuery);
-                
+
                 spentHours = timeEntries.stream()
                         .filter(te -> te.getHours() != null)
                         .mapToDouble(TimeEntry::getHours)
@@ -4098,13 +4171,13 @@ public class ProjectService {
             double remainingHours = Math.max(0, estimatedHours - spentHours);
             double hoursProgress = estimatedHours > 0 ? (spentHours / estimatedHours) * 100.0 : 0.0;
 
-            VersionProgressResponseDTO.HoursProgressData hoursProgressData = 
-                    VersionProgressResponseDTO.HoursProgressData.builder()
-                            .estimatedHours(Math.round(estimatedHours * 100.0) / 100.0)
-                            .spentHours(Math.round(spentHours * 100.0) / 100.0)
-                            .remainingHours(Math.round(remainingHours * 100.0) / 100.0)
-                            .progress(Math.round(hoursProgress * 100.0) / 100.0)
-                            .build();
+            VersionProgressResponseDTO.HoursProgressData hoursProgressData = VersionProgressResponseDTO.HoursProgressData
+                    .builder()
+                    .estimatedHours(Math.round(estimatedHours * 100.0) / 100.0)
+                    .spentHours(Math.round(spentHours * 100.0) / 100.0)
+                    .remainingHours(Math.round(remainingHours * 100.0) / 100.0)
+                    .progress(Math.round(hoursProgress * 100.0) / 100.0)
+                    .build();
 
             log.info("版本进度查询成功，版本ID: {}, 总体进度: {}%", versionId, overallProgress);
 
@@ -4163,13 +4236,14 @@ public class ProjectService {
         if (startDate != null && endDate != null) {
             long totalDays = ChronoUnit.DAYS.between(startDate, endDate);
             if (totalDays > 0) {
-                for (int percent : new int[]{25, 50, 75}) {
+                for (int percent : new int[] { 25, 50, 75 }) {
                     LocalDate milestoneDate = startDate.plusDays(totalDays * percent / 100);
                     long expectedCount = issues.size() * percent / 100;
                     long completedCount = issues.stream()
                             .filter(i -> i.getDoneRatio() != null && i.getDoneRatio() >= 100)
                             .filter(i -> {
-                                if (i.getUpdatedOn() == null) return false;
+                                if (i.getUpdatedOn() == null)
+                                    return false;
                                 LocalDate updatedDate = i.getUpdatedOn().toLocalDate();
                                 return updatedDate.isBefore(milestoneDate) || updatedDate.equals(milestoneDate);
                             })
@@ -4236,7 +4310,7 @@ public class ProjectService {
         while (!currentDate.isAfter(endDate) && !currentDate.isAfter(LocalDate.now())) {
             long dayCompleted = dailyCompleted.getOrDefault(currentDate, 0L);
             cumulativeCompleted += dayCompleted;
-            
+
             double progress = issues.size() > 0 ? (cumulativeCompleted * 100.0 / issues.size()) : 0.0;
 
             dailyData.add(VersionProgressResponseDTO.DailyProgressData.builder()
@@ -4255,8 +4329,8 @@ public class ProjectService {
     /**
      * 更新版本状态
      *
-     * @param projectId 项目ID
-     * @param versionId 版本ID
+     * @param projectId  项目ID
+     * @param versionId  版本ID
      * @param requestDTO 状态更新请求
      * @return 状态更新响应
      */
@@ -4399,8 +4473,8 @@ public class ProjectService {
     /**
      * 更新版本共享方式
      *
-     * @param projectId 项目ID
-     * @param versionId 版本ID
+     * @param projectId  项目ID
+     * @param versionId  版本ID
      * @param requestDTO 共享方式更新请求
      * @return 共享方式更新响应
      */
@@ -4549,8 +4623,8 @@ public class ProjectService {
     /**
      * 发布版本（标记为已发布）
      *
-     * @param projectId 项目ID
-     * @param versionId 版本ID
+     * @param projectId  项目ID
+     * @param versionId  版本ID
      * @param requestDTO 发布请求
      * @return 发布响应
      */
@@ -4595,7 +4669,7 @@ public class ProjectService {
             // 查询版本关联的任务统计
             LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
             issueQuery.eq(Issue::getFixedVersionId, versionId.longValue())
-                     .eq(Issue::getProjectId, projectId);
+                    .eq(Issue::getProjectId, projectId);
             List<Issue> issues = issueMapper.selectList(issueQuery);
 
             long totalIssues = issues.size();
@@ -4727,8 +4801,9 @@ public class ProjectService {
             if (!versionIds.isEmpty()) {
                 LambdaQueryWrapper<Issue> issueQuery = new LambdaQueryWrapper<>();
                 issueQuery.eq(Issue::getProjectId, projectId)
-                         .in(Issue::getFixedVersionId, versionIds.stream().map(Integer::longValue).collect(Collectors.toList()))
-                         .isNotNull(Issue::getFixedVersionId);
+                        .in(Issue::getFixedVersionId,
+                                versionIds.stream().map(Integer::longValue).collect(Collectors.toList()))
+                        .isNotNull(Issue::getFixedVersionId);
                 List<Issue> allIssues = issueMapper.selectList(issueQuery);
 
                 // 按版本ID分组统计
@@ -4780,7 +4855,8 @@ public class ProjectService {
                     daysUntilEffective = ChronoUnit.DAYS.between(today, effectiveDate);
                 }
 
-                VersionRoadmapResponseDTO.VersionTimelineItem item = VersionRoadmapResponseDTO.VersionTimelineItem.builder()
+                VersionRoadmapResponseDTO.VersionTimelineItem item = VersionRoadmapResponseDTO.VersionTimelineItem
+                        .builder()
                         .versionId(version.getId())
                         .versionName(version.getName())
                         .description(version.getDescription())
@@ -4800,7 +4876,8 @@ public class ProjectService {
 
                 // 按时间段分组（按月份）
                 if (effectiveDate != null) {
-                    String periodKey = effectiveDate.getYear() + "-" + String.format("%02d", effectiveDate.getMonthValue());
+                    String periodKey = effectiveDate.getYear() + "-"
+                            + String.format("%02d", effectiveDate.getMonthValue());
                     timelineByPeriod.computeIfAbsent(periodKey, k -> new ArrayList<>()).add(item);
                 } else {
                     // 没有生效日期的版本归入"未计划"
@@ -4876,8 +4953,8 @@ public class ProjectService {
             String sharingDescription = sharingEnum != null ? sharingEnum.getDescription() : sharing;
 
             // 根据sharing配置查询共享项目
-            List<VersionSharedProjectsResponseDTO.SharedProjectInfo> sharedProjects = 
-                    querySharedProjectsBySharing(version.getProjectId().longValue(), sharing);
+            List<VersionSharedProjectsResponseDTO.SharedProjectInfo> sharedProjects = querySharedProjectsBySharing(
+                    version.getProjectId().longValue(), sharing);
 
             log.info("版本共享项目列表查询成功，版本ID: {}, 共享方式: {}, 共享项目数: {}",
                     versionId, sharing, sharedProjects.size());
@@ -4902,14 +4979,14 @@ public class ProjectService {
      * 根据sharing配置查询共享项目
      *
      * @param ownerProjectId 版本所属项目ID
-     * @param sharing 共享方式
+     * @param sharing        共享方式
      * @return 共享项目列表
      */
     private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> querySharedProjectsBySharing(
             Long ownerProjectId, String sharing) {
-        
+
         List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
-        
+
         // 获取所属项目
         Project ownerProject = projectMapper.selectById(ownerProjectId);
         if (ownerProject == null) {
@@ -4972,7 +5049,7 @@ public class ProjectService {
     private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> getDescendantProjects(
             Long parentProjectId, String relationType, String relationDescription) {
         List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
-        
+
         Project parentProject = projectMapper.selectById(parentProjectId);
         if (parentProject == null) {
             return result;
@@ -4982,8 +5059,8 @@ public class ProjectService {
         if (parentProject.getLft() != null && parentProject.getRgt() != null) {
             LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.gt(Project::getLft, parentProject.getLft())
-                       .lt(Project::getRgt, parentProject.getRgt())
-                       .ne(Project::getId, parentProjectId);
+                    .lt(Project::getRgt, parentProject.getRgt())
+                    .ne(Project::getId, parentProjectId);
             List<Project> descendants = projectMapper.selectList(queryWrapper);
             for (Project project : descendants) {
                 result.add(convertToSharedProjectInfo(project, relationType, relationDescription));
@@ -4993,7 +5070,7 @@ public class ProjectService {
             List<Project> allProjects = projectMapper.selectList(null);
             Set<Long> descendantIds = new java.util.HashSet<>();
             collectDescendantIds(allProjects, parentProjectId, descendantIds);
-            
+
             for (Long descendantId : descendantIds) {
                 Project project = projectMapper.selectById(descendantId);
                 if (project != null) {
@@ -5011,7 +5088,7 @@ public class ProjectService {
     private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> getParentProjects(
             Long projectId, String relationType, String relationDescription) {
         List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
-        
+
         Project currentProject = projectMapper.selectById(projectId);
         if (currentProject == null || currentProject.getParentId() == null) {
             return result;
@@ -5062,7 +5139,7 @@ public class ProjectService {
     private List<VersionSharedProjectsResponseDTO.SharedProjectInfo> getTreeProjects(
             Long rootProjectId, Long ownerProjectId) {
         List<VersionSharedProjectsResponseDTO.SharedProjectInfo> result = new ArrayList<>();
-        
+
         Project rootProject = projectMapper.selectById(rootProjectId);
         if (rootProject == null) {
             return result;
@@ -5072,9 +5149,9 @@ public class ProjectService {
         if (rootProject.getLft() != null && rootProject.getRgt() != null) {
             LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
             queryWrapper.ge(Project::getLft, rootProject.getLft())
-                       .le(Project::getRgt, rootProject.getRgt());
+                    .le(Project::getRgt, rootProject.getRgt());
             List<Project> treeProjects = projectMapper.selectList(queryWrapper);
-            
+
             for (Project project : treeProjects) {
                 String relationType;
                 String relationDesc;
@@ -5096,7 +5173,7 @@ public class ProjectService {
             Set<Long> treeProjectIds = new java.util.HashSet<>();
             treeProjectIds.add(rootProjectId);
             collectDescendantIds(allProjects, rootProjectId, treeProjectIds);
-            
+
             for (Long projectId : treeProjectIds) {
                 Project project = projectMapper.selectById(projectId);
                 if (project != null) {

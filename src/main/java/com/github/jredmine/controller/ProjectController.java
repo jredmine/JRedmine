@@ -229,7 +229,7 @@ public class ProjectController {
         return ApiResponse.success("项目复制成功", result);
     }
 
-    @Operation(summary = "获取项目统计信息", description = "获取项目统计信息（成员数、子项目数、模块数、跟踪器数等）。任务和工时统计等任务管理模块实现后再完善。需要认证，项目成员或系统管理员可访问。", security = @SecurityRequirement(name = "bearerAuth"))
+    @Operation(summary = "获取项目统计信息", description = "获取项目统计报表，包含任务数、完成率、待处理/进行中/已完成分布、按状态/跟踪器统计、工时统计（总工时、本月、本周）等。需要认证，项目成员或系统管理员可访问。", security = @SecurityRequirement(name = "bearerAuth"))
     @GetMapping("/{id}/statistics")
     public ApiResponse<ProjectStatisticsResponseDTO> getProjectStatistics(@PathVariable Long id) {
         ProjectStatisticsResponseDTO result = projectService.getProjectStatistics(id);
@@ -414,7 +414,8 @@ public class ProjectController {
             @PathVariable Long projectId,
             @PathVariable Integer id,
             @Valid @RequestBody VersionIssuesBatchAssignRequestDTO requestDTO) {
-        VersionIssuesBatchAssignResponseDTO result = projectService.batchAssignIssuesToVersion(projectId, id, requestDTO);
+        VersionIssuesBatchAssignResponseDTO result = projectService.batchAssignIssuesToVersion(projectId, id,
+                requestDTO);
         return ApiResponse.success("批量关联任务完成", result);
     }
 
@@ -425,7 +426,8 @@ public class ProjectController {
             @PathVariable Long projectId,
             @PathVariable Integer id,
             @Valid @RequestBody VersionIssuesBatchUnassignRequestDTO requestDTO) {
-        VersionIssuesBatchUnassignResponseDTO result = projectService.batchUnassignIssuesFromVersion(projectId, id, requestDTO);
+        VersionIssuesBatchUnassignResponseDTO result = projectService.batchUnassignIssuesFromVersion(projectId, id,
+                requestDTO);
         return ApiResponse.success("批量取消关联完成", result);
     }
 
