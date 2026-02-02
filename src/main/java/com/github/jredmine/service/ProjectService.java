@@ -133,6 +133,7 @@ public class ProjectService {
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final IssueService issueService;
+    private final WikiService wikiService;
 
     /**
      * 分页查询项目列表
@@ -425,6 +426,9 @@ public class ProjectService {
                     enabledModuleMapper.insert(enabledModule);
                 }
                 log.debug("项目模块创建成功，项目ID: {}, 模块数量: {}", projectId, requestDTO.getEnabledModules().size());
+                if (requestDTO.getEnabledModules().contains(ProjectModule.WIKI.getCode())) {
+                    wikiService.ensureWikiForProject(projectId);
+                }
             }
 
             // 创建项目跟踪器关联
@@ -579,6 +583,9 @@ public class ProjectService {
                         enabledModuleMapper.insert(enabledModule);
                     }
                     log.debug("项目模块更新成功，项目ID: {}, 模块数量: {}", id, requestDTO.getEnabledModules().size());
+                    if (requestDTO.getEnabledModules().contains(ProjectModule.WIKI.getCode())) {
+                        wikiService.ensureWikiForProject(id);
+                    }
                 } else {
                     log.debug("项目模块已清空，项目ID: {}", id);
                 }

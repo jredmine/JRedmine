@@ -47,6 +47,9 @@ public enum ResultCode {
     TRACKER_NAME_EXISTS(409, "跟踪器名称已存在"),
     TRACKER_IN_USE(400, "跟踪器正在被项目使用，不能删除"),
 
+    // Wiki
+    WIKI_NOT_ENABLED(400, "项目未启用 Wiki 模块"),
+
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
 

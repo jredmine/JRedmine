@@ -42,8 +42,10 @@ import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.dto.response.project.VersionRoadmapResponseDTO;
 import com.github.jredmine.dto.response.project.VersionReleaseResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiInfoResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
+import com.github.jredmine.service.WikiService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -74,10 +76,12 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final IssueService issueService;
+    private final WikiService wikiService;
 
-    public ProjectController(ProjectService projectService, IssueService issueService) {
+    public ProjectController(ProjectService projectService, IssueService issueService, WikiService wikiService) {
         this.projectService = projectService;
         this.issueService = issueService;
+        this.wikiService = wikiService;
     }
 
     @Operation(summary = "获取项目列表", description = "分页查询项目列表，支持按关键词（在名称和描述中搜索）、名称（仅在名称中搜索）、状态、是否公开、父项目等条件筛选。需要认证。公开项目所有用户可见，私有项目仅项目成员可见，系统管理员可见所有项目。", security = @SecurityRequirement(name = "bearerAuth"))
@@ -99,6 +103,14 @@ public class ProjectController {
     @GetMapping("/{id}")
     public ApiResponse<ProjectDetailResponseDTO> getProjectById(@PathVariable Long id) {
         ProjectDetailResponseDTO result = projectService.getProjectById(id);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取项目 Wiki 信息", description = "获取项目 Wiki 信息（含首页标题等）。项目必须已启用 Wiki 模块；若尚无 wikis 记录则自动创建后返回。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#id, 'Project', 'view_wiki_pages')")
+    @GetMapping("/{id}/wiki")
+    public ApiResponse<WikiInfoResponseDTO> getProjectWiki(@PathVariable Long id) {
+        WikiInfoResponseDTO result = wikiService.getWikiInfo(id);
         return ApiResponse.success(result);
     }
 
