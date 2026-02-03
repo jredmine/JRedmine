@@ -49,6 +49,8 @@ public enum ResultCode {
 
     // Wiki
     WIKI_NOT_ENABLED(400, "项目未启用 Wiki 模块"),
+    WIKI_PAGE_NOT_FOUND(404, "Wiki 页面不存在"),
+    WIKI_PAGE_TITLE_EXISTS(409, "该 Wiki 下已存在同名页面"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
