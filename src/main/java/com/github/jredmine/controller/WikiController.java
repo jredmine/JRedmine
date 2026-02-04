@@ -6,6 +6,8 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.wiki.WikiPageDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageListItemResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiPageVersionDetailResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiPageVersionListItemResponseDTO;
 import com.github.jredmine.service.WikiService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -17,6 +19,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+
+import java.util.List;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -89,5 +93,39 @@ public class WikiController {
             @PathVariable String titleOrId) {
         wikiService.deletePage(projectId, titleOrId);
         return ApiResponse.success();
+    }
+
+    // ==================== 版本历史 ====================
+
+    @Operation(summary = "Wiki 页面版本列表", description = "获取指定页面的所有版本列表（按版本号倒序）。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_wiki_pages')")
+    @GetMapping("/pages/{titleOrId}/versions")
+    public ApiResponse<List<WikiPageVersionListItemResponseDTO>> listVersions(
+            @PathVariable Long projectId,
+            @PathVariable String titleOrId) {
+        List<WikiPageVersionListItemResponseDTO> result = wikiService.listVersions(projectId, titleOrId);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "查看指定版本内容", description = "获取指定页面的某一版本完整内容。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_wiki_pages')")
+    @GetMapping("/pages/{titleOrId}/versions/{version}")
+    public ApiResponse<WikiPageVersionDetailResponseDTO> getVersionContent(
+            @PathVariable Long projectId,
+            @PathVariable String titleOrId,
+            @PathVariable Integer version) {
+        WikiPageVersionDetailResponseDTO result = wikiService.getVersionContent(projectId, titleOrId, version);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "回滚到指定版本", description = "将当前页面内容回滚到指定版本（会新增一条内容版本，正文为指定版本内容，备注为「回滚到版本 N」）。需要认证，需要 edit_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'edit_wiki_pages')")
+    @PostMapping("/pages/{titleOrId}/versions/{version}/revert")
+    public ApiResponse<WikiPageDetailResponseDTO> revertToVersion(
+            @PathVariable Long projectId,
+            @PathVariable String titleOrId,
+            @PathVariable Integer version) {
+        WikiPageDetailResponseDTO result = wikiService.revertToVersion(projectId, titleOrId, version);
+        return ApiResponse.success("已回滚到版本 " + version, result);
     }
 }

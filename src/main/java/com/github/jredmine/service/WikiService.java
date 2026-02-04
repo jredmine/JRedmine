@@ -8,11 +8,14 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.wiki.WikiInfoResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageListItemResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiPageVersionDetailResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiPageVersionListItemResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.User;
 import com.github.jredmine.entity.Wiki;
 import com.github.jredmine.entity.WikiContent;
+import com.github.jredmine.entity.WikiContentVersion;
 import com.github.jredmine.entity.WikiPage;
 import com.github.jredmine.enums.ProjectModule;
 import com.github.jredmine.enums.ResultCode;
@@ -21,6 +24,7 @@ import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.user.UserMapper;
 import com.github.jredmine.mapper.wiki.WikiContentMapper;
+import com.github.jredmine.mapper.wiki.WikiContentVersionMapper;
 import com.github.jredmine.mapper.wiki.WikiMapper;
 import com.github.jredmine.mapper.wiki.WikiPageMapper;
 import com.github.jredmine.util.SecurityUtils;
@@ -29,6 +33,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -49,6 +54,7 @@ public class WikiService {
     private final WikiMapper wikiMapper;
     private final WikiPageMapper wikiPageMapper;
     private final WikiContentMapper wikiContentMapper;
+    private final WikiContentVersionMapper wikiContentVersionMapper;
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectMapper projectMapper;
     private final UserMapper userMapper;
@@ -162,6 +168,36 @@ public class WikiService {
         return wikiContentMapper.selectOne(wrapper);
     }
 
+    /**
+     * 获取某页面的指定版本内容
+     */
+    private WikiContent getContentByVersion(Long pageId, Integer version) {
+        LambdaQueryWrapper<WikiContent> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WikiContent::getPageId, pageId).eq(WikiContent::getVersion, version);
+        return wikiContentMapper.selectOne(wrapper);
+    }
+
+    /**
+     * 将当前内容版本同步写入 wiki_content_versions 表，作为持久化快照。
+     * 每次向 wiki_contents 插入新记录后调用（content 需已具备 id）。
+     */
+    private void saveContentVersionSnapshot(WikiContent content) {
+        if (content == null || content.getId() == null) {
+            return;
+        }
+        WikiContentVersion snapshot = new WikiContentVersion();
+        snapshot.setWikiContentId(content.getId());
+        snapshot.setPageId(content.getPageId());
+        snapshot.setAuthorId(content.getAuthorId());
+        String text = content.getText();
+        snapshot.setData(text != null ? text.getBytes(StandardCharsets.UTF_8) : new byte[0]);
+        snapshot.setCompression("");
+        snapshot.setComments(content.getComments());
+        snapshot.setUpdatedOn(content.getUpdatedOn());
+        snapshot.setVersion(content.getVersion());
+        wikiContentVersionMapper.insert(snapshot);
+    }
+
     private String getAuthorDisplayName(Long authorId) {
         if (authorId == null)
             return null;
@@ -237,6 +273,7 @@ public class WikiService {
         content.setUpdatedOn(now);
         content.setVersion(version);
         wikiContentMapper.insert(content);
+        saveContentVersionSnapshot(content);
 
         log.info("Wiki 页面创建成功: projectId={}, pageId={}, title={}", projectId, page.getId(), title);
         return toDetailResponse(projectId, page, content);
@@ -283,17 +320,21 @@ public class WikiService {
             content.setUpdatedOn(now);
             content.setVersion(nextVersion);
             wikiContentMapper.insert(content);
+            saveContentVersionSnapshot(content);
             log.info("Wiki 页面内容更新: projectId={}, pageId={}, version={}", projectId, page.getId(), nextVersion);
         }
         return getPageWithLatestContent(projectId, titleOrId);
     }
 
     /**
-     * 删除页面（级联删除该页所有内容）
+     * 删除页面（级联删除该页所有内容及版本快照）
      */
     @Transactional(rollbackFor = Exception.class)
     public void deletePage(Long projectId, String titleOrId) {
         WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        LambdaQueryWrapper<WikiContentVersion> versionWrapper = new LambdaQueryWrapper<>();
+        versionWrapper.eq(WikiContentVersion::getPageId, page.getId());
+        wikiContentVersionMapper.delete(versionWrapper);
         LambdaQueryWrapper<WikiContent> contentWrapper = new LambdaQueryWrapper<>();
         contentWrapper.eq(WikiContent::getPageId, page.getId());
         wikiContentMapper.delete(contentWrapper);
@@ -317,5 +358,77 @@ public class WikiService {
                 .authorId(content != null ? content.getAuthorId() : null)
                 .authorName(content != null ? getAuthorDisplayName(content.getAuthorId()) : null)
                 .build();
+    }
+
+    // ==================== Wiki 版本历史 ====================
+
+    /**
+     * 获取页面所有版本列表（按版本号倒序，最新在前）
+     */
+    public List<WikiPageVersionListItemResponseDTO> listVersions(Long projectId, String titleOrId) {
+        WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        LambdaQueryWrapper<WikiContent> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WikiContent::getPageId, page.getId()).orderByDesc(WikiContent::getVersion);
+        List<WikiContent> contents = wikiContentMapper.selectList(wrapper);
+        List<WikiPageVersionListItemResponseDTO> list = new ArrayList<>();
+        for (WikiContent c : contents) {
+            list.add(WikiPageVersionListItemResponseDTO.builder()
+                    .version(c.getVersion())
+                    .authorId(c.getAuthorId())
+                    .authorName(getAuthorDisplayName(c.getAuthorId()))
+                    .updatedOn(c.getUpdatedOn())
+                    .comments(c.getComments())
+                    .build());
+        }
+        return list;
+    }
+
+    /**
+     * 获取指定版本内容详情
+     */
+    public WikiPageVersionDetailResponseDTO getVersionContent(Long projectId, String titleOrId, Integer version) {
+        WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        WikiContent content = getContentByVersion(page.getId(), version);
+        if (content == null) {
+            throw new BusinessException(ResultCode.WIKI_VERSION_NOT_FOUND);
+        }
+        return WikiPageVersionDetailResponseDTO.builder()
+                .pageId(page.getId())
+                .pageTitle(page.getTitle())
+                .version(content.getVersion())
+                .text(content.getText())
+                .comments(content.getComments())
+                .authorId(content.getAuthorId())
+                .authorName(getAuthorDisplayName(content.getAuthorId()))
+                .updatedOn(content.getUpdatedOn())
+                .build();
+    }
+
+    /**
+     * 回滚到指定版本：将指定版本正文作为新版本插入，备注为「回滚到版本 N」
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public WikiPageDetailResponseDTO revertToVersion(Long projectId, String titleOrId, Integer version) {
+        WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        WikiContent targetContent = getContentByVersion(page.getId(), version);
+        if (targetContent == null) {
+            throw new BusinessException(ResultCode.WIKI_VERSION_NOT_FOUND);
+        }
+        WikiContent latest = getLatestContent(page.getId());
+        int nextVersion = (latest != null ? latest.getVersion() : 0) + 1;
+        Date now = new Date();
+        WikiContent newContent = new WikiContent();
+        newContent.setPageId(page.getId());
+        newContent.setAuthorId(securityUtils.getCurrentUserId());
+        newContent.setText(targetContent.getText() != null ? targetContent.getText() : "");
+        newContent.setComments("回滚到版本 " + version);
+        newContent.setUpdatedOn(now);
+        newContent.setVersion(nextVersion);
+        wikiContentMapper.insert(newContent);
+        saveContentVersionSnapshot(newContent);
+        log.info("Wiki 页面回滚: projectId={}, pageId={}, 回滚到版本={}, 新版本={}", projectId, page.getId(), version, nextVersion);
+        Wiki wiki = wikiMapper.selectById(page.getWikiId());
+        Long projectIdResolved = wiki != null ? wiki.getProjectId() : projectId;
+        return toDetailResponse(projectIdResolved, page, newContent);
     }
 }
