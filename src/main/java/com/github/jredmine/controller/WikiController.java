@@ -2,12 +2,14 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.wiki.WikiPageCreateRequestDTO;
 import com.github.jredmine.dto.request.wiki.WikiPageUpdateRequestDTO;
+import com.github.jredmine.dto.request.wiki.WikiRedirectCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.wiki.WikiPageDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageListItemResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionListItemResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiRedirectResponseDTO;
 import com.github.jredmine.service.WikiService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -127,5 +129,35 @@ public class WikiController {
             @PathVariable Integer version) {
         WikiPageDetailResponseDTO result = wikiService.revertToVersion(projectId, titleOrId, version);
         return ApiResponse.success("已回滚到版本 " + version, result);
+    }
+
+    // ==================== 重定向 ====================
+
+    @Operation(summary = "Wiki 重定向列表", description = "列出项目 Wiki 下所有重定向（原标题 -> 目标标题）。需要认证，需要 manage_wiki 或 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_wiki') or hasPermission(#projectId, 'Project', 'view_wiki_pages')")
+    @GetMapping("/redirects")
+    public ApiResponse<List<WikiRedirectResponseDTO>> listRedirects(@PathVariable Long projectId) {
+        List<WikiRedirectResponseDTO> result = wikiService.listRedirects(projectId);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "创建 Wiki 重定向", description = "创建重定向：访问原标题时解析为目标页面。目标页面须已存在；原标题不能已是页面或已有重定向。需要认证，需要 manage_wiki 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_wiki')")
+    @PostMapping("/redirects")
+    public ApiResponse<WikiRedirectResponseDTO> createRedirect(
+            @PathVariable Long projectId,
+            @Valid @RequestBody WikiRedirectCreateRequestDTO request) {
+        WikiRedirectResponseDTO result = wikiService.createRedirect(projectId, request);
+        return ApiResponse.success("重定向创建成功", result);
+    }
+
+    @Operation(summary = "删除 Wiki 重定向", description = "删除指定重定向。需要认证，需要 manage_wiki 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_wiki')")
+    @DeleteMapping("/redirects/{redirectId}")
+    public ApiResponse<Void> deleteRedirect(
+            @PathVariable Long projectId,
+            @PathVariable Long redirectId) {
+        wikiService.deleteRedirect(projectId, redirectId);
+        return ApiResponse.success();
     }
 }

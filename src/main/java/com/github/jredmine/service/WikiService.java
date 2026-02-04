@@ -8,8 +8,10 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.wiki.WikiInfoResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageListItemResponseDTO;
+import com.github.jredmine.dto.request.wiki.WikiRedirectCreateRequestDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionListItemResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiRedirectResponseDTO;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.entity.User;
@@ -17,6 +19,7 @@ import com.github.jredmine.entity.Wiki;
 import com.github.jredmine.entity.WikiContent;
 import com.github.jredmine.entity.WikiContentVersion;
 import com.github.jredmine.entity.WikiPage;
+import com.github.jredmine.entity.WikiRedirect;
 import com.github.jredmine.enums.ProjectModule;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
@@ -27,6 +30,7 @@ import com.github.jredmine.mapper.wiki.WikiContentMapper;
 import com.github.jredmine.mapper.wiki.WikiContentVersionMapper;
 import com.github.jredmine.mapper.wiki.WikiMapper;
 import com.github.jredmine.mapper.wiki.WikiPageMapper;
+import com.github.jredmine.mapper.wiki.WikiRedirectMapper;
 import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +59,7 @@ public class WikiService {
     private final WikiPageMapper wikiPageMapper;
     private final WikiContentMapper wikiContentMapper;
     private final WikiContentVersionMapper wikiContentVersionMapper;
+    private final WikiRedirectMapper wikiRedirectMapper;
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectMapper projectMapper;
     private final UserMapper userMapper;
@@ -135,12 +140,20 @@ public class WikiService {
     // ==================== Wiki 页面 CRUD ====================
 
     /**
-     * 根据 titleOrId 解析为 WikiPage：纯数字则按 id 查，否则按 title 查（同一 wiki 下）
+     * 根据 titleOrId 解析为 WikiPage：纯数字则按 id 查，否则按 title 查（同一 wiki 下）。
+     * 按标题查时先解析重定向：若存在重定向则用目标标题查页面。
      */
     public WikiPage getPageByProjectAndTitleOrId(Long projectId, String titleOrId) {
         Wiki wiki = getOrCreateWiki(projectId);
         if (titleOrId == null || titleOrId.isBlank()) {
             throw new BusinessException(ResultCode.WIKI_PAGE_NOT_FOUND);
+        }
+        String effectiveTitle = titleOrId.trim();
+        if (!titleOrId.matches("\\d+")) {
+            String resolved = resolveRedirect(projectId, effectiveTitle);
+            if (resolved != null) {
+                effectiveTitle = resolved;
+            }
         }
         WikiPage page;
         if (titleOrId.matches("\\d+")) {
@@ -150,7 +163,7 @@ public class WikiService {
             }
         } else {
             LambdaQueryWrapper<WikiPage> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(WikiPage::getWikiId, wiki.getId()).eq(WikiPage::getTitle, titleOrId.trim());
+            wrapper.eq(WikiPage::getWikiId, wiki.getId()).eq(WikiPage::getTitle, effectiveTitle);
             page = wikiPageMapper.selectOne(wrapper);
             if (page == null) {
                 throw new BusinessException(ResultCode.WIKI_PAGE_NOT_FOUND);
@@ -280,7 +293,7 @@ public class WikiService {
     }
 
     /**
-     * 获取页面详情（含最新内容）
+     * 获取页面详情（含最新内容）。按标题访问时若存在重定向会在 getPageByProjectAndTitleOrId 中解析。
      */
     public WikiPageDetailResponseDTO getPageWithLatestContent(Long projectId, String titleOrId) {
         WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
@@ -430,5 +443,102 @@ public class WikiService {
         Wiki wiki = wikiMapper.selectById(page.getWikiId());
         Long projectIdResolved = wiki != null ? wiki.getProjectId() : projectId;
         return toDetailResponse(projectIdResolved, page, newContent);
+    }
+
+    // ==================== Wiki 重定向 ====================
+
+    /**
+     * 解析重定向：若标题存在重定向则返回目标标题，否则返回 null。
+     */
+    public String resolveRedirect(Long projectId, String title) {
+        if (title == null || title.isBlank()) return null;
+        Wiki wiki = getOrCreateWiki(projectId);
+        LambdaQueryWrapper<WikiRedirect> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WikiRedirect::getWikiId, wiki.getId()).eq(WikiRedirect::getTitle, title.trim());
+        WikiRedirect redirect = wikiRedirectMapper.selectOne(wrapper);
+        return redirect != null ? redirect.getRedirectsTo() : null;
+    }
+
+    /**
+     * 创建重定向：原标题 -> 目标标题（目标页须存在于本 Wiki）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public WikiRedirectResponseDTO createRedirect(Long projectId, WikiRedirectCreateRequestDTO dto) {
+        if (dto == null || dto.getTitle() == null || dto.getTitle().isBlank()
+                || dto.getRedirectsTo() == null || dto.getRedirectsTo().isBlank()) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "原标题与目标标题不能为空");
+        }
+        Wiki wiki = getOrCreateWiki(projectId);
+        String title = dto.getTitle().trim();
+        String redirectsTo = dto.getRedirectsTo().trim();
+        if (title.equals(redirectsTo)) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "原标题不能与目标标题相同");
+        }
+        LambdaQueryWrapper<WikiPage> pageByTitle = new LambdaQueryWrapper<>();
+        pageByTitle.eq(WikiPage::getWikiId, wiki.getId()).eq(WikiPage::getTitle, title);
+        if (wikiPageMapper.selectCount(pageByTitle) > 0) {
+            throw new BusinessException(ResultCode.WIKI_REDIRECT_TITLE_EXISTS);
+        }
+        LambdaQueryWrapper<WikiRedirect> redirectExist = new LambdaQueryWrapper<>();
+        redirectExist.eq(WikiRedirect::getWikiId, wiki.getId()).eq(WikiRedirect::getTitle, title);
+        if (wikiRedirectMapper.selectCount(redirectExist) > 0) {
+            throw new BusinessException(ResultCode.WIKI_REDIRECT_TITLE_EXISTS);
+        }
+        LambdaQueryWrapper<WikiPage> targetPage = new LambdaQueryWrapper<>();
+        targetPage.eq(WikiPage::getWikiId, wiki.getId()).eq(WikiPage::getTitle, redirectsTo);
+        if (wikiPageMapper.selectCount(targetPage) == 0) {
+            throw new BusinessException(ResultCode.WIKI_REDIRECT_TARGET_NOT_FOUND);
+        }
+        Date now = new Date();
+        WikiRedirect redirect = new WikiRedirect();
+        redirect.setWikiId(wiki.getId());
+        redirect.setTitle(title);
+        redirect.setRedirectsTo(redirectsTo);
+        redirect.setRedirectsToWikiId(wiki.getId());
+        redirect.setCreatedOn(now);
+        wikiRedirectMapper.insert(redirect);
+        log.info("Wiki 重定向创建: projectId={}, title={} -> {}", projectId, title, redirectsTo);
+        return toRedirectResponse(redirect, projectId);
+    }
+
+    /**
+     * 列出项目 Wiki 下所有重定向
+     */
+    public List<WikiRedirectResponseDTO> listRedirects(Long projectId) {
+        Wiki wiki = getOrCreateWiki(projectId);
+        LambdaQueryWrapper<WikiRedirect> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WikiRedirect::getWikiId, wiki.getId()).orderByAsc(WikiRedirect::getTitle);
+        List<WikiRedirect> list = wikiRedirectMapper.selectList(wrapper);
+        List<WikiRedirectResponseDTO> result = new ArrayList<>();
+        for (WikiRedirect r : list) {
+            result.add(toRedirectResponse(r, projectId));
+        }
+        return result;
+    }
+
+    /**
+     * 删除重定向
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteRedirect(Long projectId, Long redirectId) {
+        Wiki wiki = getOrCreateWiki(projectId);
+        WikiRedirect redirect = wikiRedirectMapper.selectById(redirectId);
+        if (redirect == null || !redirect.getWikiId().equals(wiki.getId())) {
+            throw new BusinessException(ResultCode.WIKI_REDIRECT_NOT_FOUND);
+        }
+        wikiRedirectMapper.deleteById(redirectId);
+        log.info("Wiki 重定向已删除: projectId={}, redirectId={}, title={}", projectId, redirectId, redirect.getTitle());
+    }
+
+    private WikiRedirectResponseDTO toRedirectResponse(WikiRedirect r, Long projectId) {
+        return WikiRedirectResponseDTO.builder()
+                .id(r.getId())
+                .wikiId(r.getWikiId())
+                .projectId(projectId)
+                .title(r.getTitle())
+                .redirectsTo(r.getRedirectsTo())
+                .redirectsToWikiId(r.getRedirectsToWikiId())
+                .createdOn(r.getCreatedOn())
+                .build();
     }
 }

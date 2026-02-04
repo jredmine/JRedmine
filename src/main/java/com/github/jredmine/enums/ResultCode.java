@@ -52,6 +52,9 @@ public enum ResultCode {
     WIKI_PAGE_NOT_FOUND(404, "Wiki 页面不存在"),
     WIKI_PAGE_TITLE_EXISTS(409, "该 Wiki 下已存在同名页面"),
     WIKI_VERSION_NOT_FOUND(404, "Wiki 版本不存在"),
+    WIKI_REDIRECT_NOT_FOUND(404, "Wiki 重定向不存在"),
+    WIKI_REDIRECT_TITLE_EXISTS(409, "该标题已是重定向或已存在同名页面"),
+    WIKI_REDIRECT_TARGET_NOT_FOUND(404, "重定向目标页面不存在"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
