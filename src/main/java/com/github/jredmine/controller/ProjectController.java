@@ -42,6 +42,7 @@ import com.github.jredmine.dto.response.project.VersionSharingUpdateResponseDTO;
 import com.github.jredmine.dto.response.project.VersionSharedProjectsResponseDTO;
 import com.github.jredmine.dto.response.project.VersionRoadmapResponseDTO;
 import com.github.jredmine.dto.response.project.VersionReleaseResponseDTO;
+import com.github.jredmine.dto.request.wiki.WikiUpdateRequestDTO;
 import com.github.jredmine.dto.response.wiki.WikiInfoResponseDTO;
 import com.github.jredmine.service.IssueService;
 import com.github.jredmine.service.ProjectService;
@@ -112,6 +113,16 @@ public class ProjectController {
     public ApiResponse<WikiInfoResponseDTO> getProjectWiki(@PathVariable Long id) {
         WikiInfoResponseDTO result = wikiService.getWikiInfo(id);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "更新项目 Wiki 设置", description = "更新 Wiki 首页等设置（如 startPage 须为已存在的页面标题）。需要认证，需要 manage_wiki 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#id, 'Project', 'manage_wiki')")
+    @PutMapping("/{id}/wiki")
+    public ApiResponse<WikiInfoResponseDTO> updateProjectWiki(
+            @PathVariable Long id,
+            @RequestBody(required = false) WikiUpdateRequestDTO request) {
+        WikiInfoResponseDTO result = wikiService.updateWikiInfo(id, request);
+        return ApiResponse.success("Wiki 设置已更新", result);
     }
 
     @Operation(summary = "创建项目", description = "创建新项目。需要认证，需要 create_projects 权限或系统管理员。创建者自动成为项目成员。", security = @SecurityRequirement(name = "bearerAuth"))

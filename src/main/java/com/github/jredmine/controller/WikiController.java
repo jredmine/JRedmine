@@ -7,9 +7,11 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.wiki.WikiPageDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageListItemResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiPageTreeNodeResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionListItemResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiRedirectResponseDTO;
+import com.github.jredmine.service.WikiExportService;
 import com.github.jredmine.service.WikiService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -25,6 +27,9 @@ import org.springframework.web.bind.annotation.PutMapping;
 import java.util.List;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -39,9 +44,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class WikiController {
 
     private final WikiService wikiService;
+    private final WikiExportService wikiExportService;
 
-    public WikiController(WikiService wikiService) {
+    public WikiController(WikiService wikiService, WikiExportService wikiExportService) {
         this.wikiService = wikiService;
+        this.wikiExportService = wikiExportService;
     }
 
     @Operation(summary = "Wiki 页面列表", description = "分页列出项目 Wiki 页面，可选按父页面 ID 筛选。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
@@ -53,6 +60,14 @@ public class WikiController {
             @RequestParam(value = "size", defaultValue = "20") Integer size,
             @RequestParam(value = "parentId", required = false) Long parentId) {
         PageResponse<WikiPageListItemResponseDTO> result = wikiService.listPages(projectId, current, size, parentId);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "Wiki 页面树形列表", description = "按父子关系树形列出所有页面（含 children 嵌套）。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_wiki_pages')")
+    @GetMapping("/pages/tree")
+    public ApiResponse<List<WikiPageTreeNodeResponseDTO>> listPagesTree(@PathVariable Long projectId) {
+        List<WikiPageTreeNodeResponseDTO> result = wikiService.listPagesTree(projectId);
         return ApiResponse.success(result);
     }
 
@@ -159,5 +174,37 @@ public class WikiController {
             @PathVariable Long redirectId) {
         wikiService.deleteRedirect(projectId, redirectId);
         return ApiResponse.success();
+    }
+
+    // ==================== 导出 ====================
+
+    @Operation(summary = "导出单页", description = "导出指定页面为 Markdown 或 HTML 文件。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_wiki_pages')")
+    @GetMapping("/export/pages/{titleOrId}")
+    public ResponseEntity<byte[]> exportPage(
+            @PathVariable Long projectId,
+            @PathVariable String titleOrId,
+            @RequestParam(value = "format", defaultValue = "markdown") String format) {
+        byte[] data = "html".equalsIgnoreCase(format)
+                ? wikiExportService.exportPageToHtml(projectId, titleOrId)
+                : wikiExportService.exportPageToMarkdown(projectId, titleOrId);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType("markdown".equalsIgnoreCase(format) ? MediaType.parseMediaType("text/markdown;charset=UTF-8") : MediaType.parseMediaType("text/html;charset=UTF-8"));
+        String ext = "html".equalsIgnoreCase(format) ? "html" : "md";
+        headers.setContentDispositionFormData("attachment", "wiki-page." + ext);
+        return ResponseEntity.ok().headers(headers).body(data);
+    }
+
+    @Operation(summary = "导出全部页面", description = "导出项目 Wiki 全部页面为 ZIP（内为多份 .md 文件）。需要认证，需要 view_wiki_pages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_wiki_pages')")
+    @GetMapping("/export/all")
+    public ResponseEntity<byte[]> exportAll(
+            @PathVariable Long projectId,
+            @RequestParam(value = "format", defaultValue = "markdown") String format) {
+        byte[] data = wikiExportService.exportAllToMarkdownZip(projectId);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "wiki-export.zip");
+        return ResponseEntity.ok().headers(headers).body(data);
     }
 }

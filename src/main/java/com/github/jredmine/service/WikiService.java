@@ -8,7 +8,9 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.wiki.WikiInfoResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageListItemResponseDTO;
+import com.github.jredmine.dto.response.wiki.WikiPageTreeNodeResponseDTO;
 import com.github.jredmine.dto.request.wiki.WikiRedirectCreateRequestDTO;
+import com.github.jredmine.dto.request.wiki.WikiUpdateRequestDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionDetailResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiPageVersionListItemResponseDTO;
 import com.github.jredmine.dto.response.wiki.WikiRedirectResponseDTO;
@@ -31,6 +33,7 @@ import com.github.jredmine.mapper.wiki.WikiContentVersionMapper;
 import com.github.jredmine.mapper.wiki.WikiMapper;
 import com.github.jredmine.mapper.wiki.WikiPageMapper;
 import com.github.jredmine.mapper.wiki.WikiRedirectMapper;
+import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +44,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Wiki 服务：项目启用模块时创建/获取 wikis，以及获取 Wiki 信息
@@ -64,6 +69,7 @@ public class WikiService {
     private final ProjectMapper projectMapper;
     private final UserMapper userMapper;
     private final SecurityUtils securityUtils;
+    private final ProjectPermissionService projectPermissionService;
 
     /**
      * 检查项目是否启用了 Wiki 模块
@@ -135,6 +141,26 @@ public class WikiService {
                 .startPage(wiki.getStartPage())
                 .status(wiki.getStatus())
                 .build();
+    }
+
+    /**
+     * 更新 Wiki 设置（如首页 start_page）。仅更新非空字段。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public WikiInfoResponseDTO updateWikiInfo(Long projectId, WikiUpdateRequestDTO dto) {
+        Wiki wiki = getOrCreateWiki(projectId);
+        if (dto != null && dto.getStartPage() != null && !dto.getStartPage().isBlank()) {
+            String startPage = dto.getStartPage().trim();
+            LambdaQueryWrapper<WikiPage> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(WikiPage::getWikiId, wiki.getId()).eq(WikiPage::getTitle, startPage);
+            if (wikiPageMapper.selectCount(wrapper) == 0) {
+                throw new BusinessException(ResultCode.WIKI_PAGE_NOT_FOUND, "首页标题对应的页面不存在");
+            }
+            wiki.setStartPage(startPage);
+            wikiMapper.updateById(wiki);
+            log.info("Wiki 首页已更新: projectId={}, startPage={}", projectId, startPage);
+        }
+        return getWikiInfo(projectId);
     }
 
     // ==================== Wiki 页面 CRUD ====================
@@ -254,6 +280,59 @@ public class WikiService {
     }
 
     /**
+     * 树形列出 Wiki 页面（按 parentId 嵌套 children）
+     */
+    public List<WikiPageTreeNodeResponseDTO> listPagesTree(Long projectId) {
+        Wiki wiki = getOrCreateWiki(projectId);
+        LambdaQueryWrapper<WikiPage> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WikiPage::getWikiId, wiki.getId()).orderByAsc(WikiPage::getTitle);
+        List<WikiPage> allPages = wikiPageMapper.selectList(wrapper);
+        List<WikiContent> latestContents = new ArrayList<>();
+        for (WikiPage p : allPages) {
+            WikiContent c = getLatestContent(p.getId());
+            if (c != null) latestContents.add(c);
+        }
+        Map<Long, WikiContent> contentByPageId = latestContents.stream()
+                .collect(Collectors.toMap(WikiContent::getPageId, c -> c, (a, b) -> a));
+        Map<Long, List<WikiPage>> byParentId = allPages.stream()
+                .collect(Collectors.groupingBy(p -> p.getParentId() != null ? p.getParentId() : 0L));
+        return buildPageTree(0L, byParentId, contentByPageId);
+    }
+
+    private List<WikiPageTreeNodeResponseDTO> buildPageTree(Long parentId, Map<Long, List<WikiPage>> byParentId,
+            Map<Long, WikiContent> contentByPageId) {
+        List<WikiPage> children = byParentId.get(parentId);
+        if (children == null) return new ArrayList<>();
+        List<WikiPageTreeNodeResponseDTO> list = new ArrayList<>();
+        for (WikiPage p : children) {
+            WikiContent c = contentByPageId.get(p.getId());
+            list.add(WikiPageTreeNodeResponseDTO.builder()
+                    .id(p.getId())
+                    .title(p.getTitle())
+                    .parentId(p.getParentId())
+                    .isProtected(p.getIsProtected())
+                    .createdOn(p.getCreatedOn())
+                    .updatedOn(c != null ? c.getUpdatedOn() : p.getCreatedOn())
+                    .version(c != null ? c.getVersion() : 0)
+                    .authorName(c != null ? getAuthorDisplayName(c.getAuthorId()) : null)
+                    .children(buildPageTree(p.getId(), byParentId, contentByPageId))
+                    .build());
+        }
+        return list;
+    }
+
+    /**
+     * 保护页策略：若页面为保护页，仅管理员或具备 manage_wiki 的用户可编辑/删除。
+     */
+    private void ensureNotProtectedForEdit(Long projectId, WikiPage page) {
+        if (!Boolean.TRUE.equals(page.getIsProtected())) return;
+        User currentUser = securityUtils.getCurrentUser();
+        if (Boolean.TRUE.equals(currentUser.getAdmin())) return;
+        if (projectPermissionService.hasPermission(currentUser.getId(), projectId, "manage_wiki")) return;
+        throw new BusinessException(ResultCode.FORBIDDEN, "保护页仅允许管理员或具有 Wiki 管理权限的用户编辑/删除");
+    }
+
+    /**
      * 创建 Wiki 页面（可选带初始内容）
      */
     @Transactional(rollbackFor = Exception.class)
@@ -309,6 +388,7 @@ public class WikiService {
     @Transactional(rollbackFor = Exception.class)
     public WikiPageDetailResponseDTO updatePage(Long projectId, String titleOrId, WikiPageUpdateRequestDTO dto) {
         WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        ensureNotProtectedForEdit(projectId, page);
         if (dto == null) {
             return getPageWithLatestContent(projectId, titleOrId);
         }
@@ -345,6 +425,7 @@ public class WikiService {
     @Transactional(rollbackFor = Exception.class)
     public void deletePage(Long projectId, String titleOrId) {
         WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        ensureNotProtectedForEdit(projectId, page);
         LambdaQueryWrapper<WikiContentVersion> versionWrapper = new LambdaQueryWrapper<>();
         versionWrapper.eq(WikiContentVersion::getPageId, page.getId());
         wikiContentVersionMapper.delete(versionWrapper);
@@ -423,6 +504,7 @@ public class WikiService {
     @Transactional(rollbackFor = Exception.class)
     public WikiPageDetailResponseDTO revertToVersion(Long projectId, String titleOrId, Integer version) {
         WikiPage page = getPageByProjectAndTitleOrId(projectId, titleOrId);
+        ensureNotProtectedForEdit(projectId, page);
         WikiContent targetContent = getContentByVersion(page.getId(), version);
         if (targetContent == null) {
             throw new BusinessException(ResultCode.WIKI_VERSION_NOT_FOUND);
