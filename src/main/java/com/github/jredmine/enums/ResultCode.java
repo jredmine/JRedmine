@@ -59,6 +59,7 @@ public enum ResultCode {
     // 文档
     DOCUMENTS_NOT_ENABLED(400, "项目未启用文档模块"),
     DOCUMENT_CATEGORY_NOT_FOUND(400, "文档分类不存在或不可用于当前项目"),
+    DOCUMENT_NOT_FOUND(404, "文档不存在"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),

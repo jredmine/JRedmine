@@ -1,6 +1,7 @@
 package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
+import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.document.DocumentDetailResponseDTO;
 import com.github.jredmine.service.DocumentService;
@@ -11,6 +12,7 @@ import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,5 +42,16 @@ public class DocumentController {
             @Valid @RequestBody DocumentCreateRequestDTO request) {
         DocumentDetailResponseDTO result = documentService.create(projectId, request);
         return ApiResponse.success("文档创建成功", result);
+    }
+
+    @Operation(summary = "更新文档", description = "更新文档的 title、description、categoryId；仅更新请求体中提供的非空字段。需要 edit_documents 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'edit_documents')")
+    @PutMapping("/{documentId}")
+    public ApiResponse<DocumentDetailResponseDTO> update(
+            @PathVariable Long projectId,
+            @PathVariable Integer documentId,
+            @RequestBody(required = false) DocumentUpdateRequestDTO request) {
+        DocumentDetailResponseDTO result = documentService.update(projectId, documentId, request);
+        return ApiResponse.success("文档更新成功", result);
     }
 }

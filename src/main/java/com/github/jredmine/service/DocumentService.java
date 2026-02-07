@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
+import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
 import com.github.jredmine.dto.response.document.DocumentDetailResponseDTO;
 import com.github.jredmine.entity.Document;
 import com.github.jredmine.entity.EnabledModule;
@@ -22,7 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Date;
 
 /**
- * 文档服务：创建、列表、详情、更新、删除（本期仅实现创建）
+ * 文档服务：创建、列表、详情、更新、删除
  *
  * @author panfeng
  */
@@ -82,6 +83,56 @@ public class DocumentService {
         documentMapper.insert(doc);
         log.info("文档创建成功: projectId={}, documentId={}, title={}", projectId, doc.getId(), title);
         return toDetailResponse(doc, projectId.longValue());
+    }
+
+    /**
+     * 更新文档：仅更新请求中非空字段（title、description、categoryId）。
+     * 要求文档属于当前项目且项目已启用文档模块；若传入 categoryId&gt;0 会做分类校验。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public DocumentDetailResponseDTO update(Long projectId, Integer documentId, DocumentUpdateRequestDTO dto) {
+        if (dto == null) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "更新内容不能为空");
+        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        Document doc = getDocumentByProjectAndId(projectId, documentId);
+        if (dto.getTitle() != null) {
+            String title = dto.getTitle().trim();
+            if (title.isEmpty()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "文档标题不能为空");
+            }
+            doc.setTitle(title);
+        }
+        if (dto.getDescription() != null) {
+            doc.setDescription(dto.getDescription());
+        }
+        if (dto.getCategoryId() != null) {
+            int categoryId = dto.getCategoryId() < 0 ? 0 : dto.getCategoryId();
+            if (categoryId > 0) {
+                validateDocumentCategory(categoryId, projectId);
+            }
+            doc.setCategoryId(categoryId);
+        }
+        documentMapper.updateById(doc);
+        log.info("文档已更新: projectId={}, documentId={}", projectId, documentId);
+        return toDetailResponse(doc, projectId.longValue());
+    }
+
+    /**
+     * 按项目与文档 ID 获取文档，不存在或不属于该项目则抛 DOCUMENT_NOT_FOUND。
+     */
+    private Document getDocumentByProjectAndId(Long projectId, Integer documentId) {
+        Document doc = documentMapper.selectById(documentId);
+        if (doc == null || !doc.getProjectId().equals(projectId.intValue())) {
+            throw new BusinessException(ResultCode.DOCUMENT_NOT_FOUND);
+        }
+        return doc;
     }
 
     /**
