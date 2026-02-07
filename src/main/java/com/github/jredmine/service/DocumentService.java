@@ -3,6 +3,7 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
+import com.github.jredmine.dto.response.document.DocumentCategoryResponseDTO;
 import com.github.jredmine.dto.response.document.DocumentDetailResponseDTO;
 import com.github.jredmine.entity.Document;
 import com.github.jredmine.entity.EnabledModule;
@@ -21,6 +22,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 文档服务：创建、列表、详情、更新、删除
@@ -38,6 +41,35 @@ public class DocumentService {
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectMapper projectMapper;
     private final EnumerationMapper enumerationMapper;
+
+    /**
+     * 文档分类列表：某项目可用的文档分类（全局 + 当前项目），按 position、name 排序，供下拉/筛选。
+     * 要求项目存在且已启用文档模块。
+     */
+    public List<DocumentCategoryResponseDTO> listDocumentCategories(Long projectId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        LambdaQueryWrapper<Enumeration> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Enumeration::getType, ENUM_TYPE_DOCUMENT_CATEGORY)
+                .eq(Enumeration::getActive, true)
+                .and(w -> w.isNull(Enumeration::getProjectId).or().eq(Enumeration::getProjectId, projectId.intValue()))
+                .orderByAsc(Enumeration::getPosition)
+                .orderByAsc(Enumeration::getName);
+        List<Enumeration> list = enumerationMapper.selectList(wrapper);
+        return list.stream()
+                .map(e -> DocumentCategoryResponseDTO.builder()
+                        .id(e.getId())
+                        .name(e.getName())
+                        .position(e.getPosition())
+                        .projectId(e.getProjectId())
+                        .build())
+                .collect(Collectors.toList());
+    }
 
     /**
      * 检查项目是否启用了文档模块
