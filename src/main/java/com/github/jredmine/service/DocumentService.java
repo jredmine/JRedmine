@@ -219,6 +219,25 @@ public class DocumentService {
     }
 
     /**
+     * 删除文档：同时级联删除该文档下的所有附件（数据库记录与物理文件）。
+     * 要求文档属于当前项目且项目已启用文档模块。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void delete(Long projectId, Integer documentId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        Document doc = getDocumentByProjectAndId(projectId, documentId);
+        attachmentService.deleteAttachmentsByContainer(CONTAINER_TYPE_DOCUMENT, documentId.longValue());
+        documentMapper.deleteById(documentId);
+        log.info("文档已删除（含附件）: projectId={}, documentId={}, title={}", projectId, documentId, doc.getTitle());
+    }
+
+    /**
      * 为文档详情填充附件数量与附件列表（仅详情接口使用）。
      */
     private void fillAttachments(DocumentDetailResponseDTO detail, Integer documentId) {

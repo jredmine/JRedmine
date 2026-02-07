@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -80,5 +81,15 @@ public class DocumentController {
             @RequestBody(required = false) DocumentUpdateRequestDTO request) {
         DocumentDetailResponseDTO result = documentService.update(projectId, documentId, request);
         return ApiResponse.success("文档更新成功", result);
+    }
+
+    @Operation(summary = "删除文档", description = "删除文档及其下所有附件（数据库记录与物理文件）。需要 delete_documents 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'delete_documents')")
+    @DeleteMapping("/{documentId}")
+    public ApiResponse<Void> delete(
+            @PathVariable Long projectId,
+            @PathVariable Integer documentId) {
+        documentService.delete(projectId, documentId);
+        return ApiResponse.success();
     }
 }

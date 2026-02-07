@@ -456,39 +456,52 @@ public class AttachmentService {
             throw new BusinessException("无权限删除此附件");
         }
 
-        // 删除数据库记录
         attachmentMapper.deleteById(id);
+        deletePhysicalFile(attachment);
+        log.info("删除附件成功: id={}", id);
+    }
 
-        // 删除物理文件（根据记录的存储类型）
+    /**
+     * 按容器删除所有附件（含物理文件）。用于删除文档/任务等时级联删除附件，不做按作者的权限校验，由调用方保证权限。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteAttachmentsByContainer(String containerType, Long containerId) {
+        LambdaQueryWrapper<Attachment> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Attachment::getContainerType, containerType).eq(Attachment::getContainerId, containerId);
+        List<Attachment> list = attachmentMapper.selectList(wrapper);
+        for (Attachment att : list) {
+            attachmentMapper.deleteById(att.getId());
+            deletePhysicalFile(att);
+        }
+        if (!list.isEmpty()) {
+            log.info("按容器删除附件: containerType={}, containerId={}, 数量={}", containerType, containerId, list.size());
+        }
+    }
+
+    /**
+     * 删除附件的物理文件（OSS/COS/本地），不删数据库记录。
+     */
+    private void deletePhysicalFile(Attachment attachment) {
         try {
             if (isOssStorage(attachment)) {
-                // OSS存储
                 String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
                 ossService.deleteFile(objectKey);
-                
-                // 如果存在缩略图，也删除
                 if (isImageFile(attachment.getContentType(), attachment.getFilename())) {
                     String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
                     ossService.deleteFile(thumbnailKey);
                 }
             } else if (isCosStorage(attachment)) {
-                // COS存储
                 String objectKey = attachment.getDiskDirectory() + "/" + attachment.getDiskFilename();
                 cosService.deleteFile(objectKey);
-                
-                // 如果存在缩略图，也删除
                 if (isImageFile(attachment.getContentType(), attachment.getFilename())) {
                     String thumbnailKey = attachment.getDiskDirectory() + "/thumb_" + attachment.getDiskFilename();
                     cosService.deleteFile(thumbnailKey);
                 }
             } else {
-                // 本地存储
                 Path baseStoragePath = getStoragePath();
                 Path filePath = baseStoragePath.resolve(attachment.getDiskDirectory())
                         .resolve(attachment.getDiskFilename());
                 Files.deleteIfExists(filePath);
-                
-                // 如果存在缩略图，也删除
                 if (isImageFile(attachment.getContentType(), attachment.getFilename())) {
                     Path thumbnailPath = baseStoragePath.resolve(attachment.getDiskDirectory())
                             .resolve("thumb_" + attachment.getDiskFilename());
@@ -496,11 +509,8 @@ public class AttachmentService {
                 }
             }
         } catch (Exception e) {
-            log.error("删除文件失败: {}", e.getMessage(), e);
-            // 继续执行，不抛出异常
+            log.error("删除文件失败: attachmentId={}, {}", attachment.getId(), e.getMessage(), e);
         }
-
-        log.info("删除附件成功: id={}", id);
     }
 
     /**
