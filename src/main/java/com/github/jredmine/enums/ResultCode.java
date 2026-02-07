@@ -59,6 +59,9 @@ public enum ResultCode {
     // 文档
     DOCUMENTS_NOT_ENABLED(400, "项目未启用文档模块"),
     DOCUMENT_CATEGORY_NOT_FOUND(400, "文档分类不存在或不可用于当前项目"),
+    DOCUMENT_CATEGORY_NAME_EXISTS(409, "该项目下已存在同名文档分类"),
+    DOCUMENT_CATEGORY_IN_USE(400, "该分类下仍有文档，无法删除"),
+    DOCUMENT_CATEGORY_NOT_EDITABLE(400, "仅可编辑或删除项目级分类，不可操作全局分类"),
     DOCUMENT_NOT_FOUND(404, "文档不存在"),
 
     // 菜单错误

@@ -2,6 +2,8 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.attachment.AttachmentQueryRequestDTO;
+import com.github.jredmine.dto.request.document.DocumentCategoryCreateRequestDTO;
+import com.github.jredmine.dto.request.document.DocumentCategoryUpdateRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
@@ -79,6 +81,134 @@ public class DocumentService {
                         .projectId(e.getProjectId())
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 创建项目级文档分类（写入 enumerations，type=DocumentCategory，project_id=项目ID）。
+     * 同一项目下分类名称不可重复。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public DocumentCategoryResponseDTO createDocumentCategory(Long projectId, DocumentCategoryCreateRequestDTO dto) {
+        if (dto == null || dto.getName() == null || dto.getName().isBlank()) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "分类名称不能为空");
+        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        String name = dto.getName().trim();
+        LambdaQueryWrapper<Enumeration> existWrapper = new LambdaQueryWrapper<>();
+        existWrapper.eq(Enumeration::getType, ENUM_TYPE_DOCUMENT_CATEGORY)
+                .eq(Enumeration::getProjectId, projectId.intValue())
+                .eq(Enumeration::getName, name);
+        if (enumerationMapper.selectCount(existWrapper) > 0) {
+            throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_NAME_EXISTS);
+        }
+        Integer position = dto.getPosition() != null ? dto.getPosition() : 0;
+        Enumeration enumeration = new Enumeration();
+        enumeration.setType(ENUM_TYPE_DOCUMENT_CATEGORY);
+        enumeration.setProjectId(projectId.intValue());
+        enumeration.setName(name);
+        enumeration.setPosition(position);
+        enumeration.setActive(true);
+        enumerationMapper.insert(enumeration);
+        log.info("项目级文档分类已创建: projectId={}, categoryId={}, name={}", projectId, enumeration.getId(), name);
+        return DocumentCategoryResponseDTO.builder()
+                .id(enumeration.getId())
+                .name(enumeration.getName())
+                .position(enumeration.getPosition())
+                .projectId(enumeration.getProjectId())
+                .build();
+    }
+
+    /**
+     * 更新项目级文档分类（仅可更新本项目下的分类，不可更新全局分类）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public DocumentCategoryResponseDTO updateDocumentCategory(Long projectId, Integer categoryId,
+            DocumentCategoryUpdateRequestDTO dto) {
+        if (dto == null) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "更新内容不能为空");
+        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        Enumeration cat = getProjectDocumentCategoryOrThrow(projectId, categoryId);
+        if (dto.getName() != null) {
+            String name = dto.getName().trim();
+            if (name.isEmpty()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "分类名称不能为空");
+            }
+            LambdaQueryWrapper<Enumeration> sameName = new LambdaQueryWrapper<>();
+            sameName.eq(Enumeration::getType, ENUM_TYPE_DOCUMENT_CATEGORY)
+                    .eq(Enumeration::getProjectId, projectId.intValue())
+                    .eq(Enumeration::getName, name)
+                    .ne(Enumeration::getId, categoryId);
+            if (enumerationMapper.selectCount(sameName) > 0) {
+                throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_NAME_EXISTS);
+            }
+            cat.setName(name);
+        }
+        if (dto.getPosition() != null) {
+            cat.setPosition(dto.getPosition());
+        }
+        enumerationMapper.updateById(cat);
+        log.info("项目级文档分类已更新: projectId={}, categoryId={}", projectId, categoryId);
+        return DocumentCategoryResponseDTO.builder()
+                .id(cat.getId())
+                .name(cat.getName())
+                .position(cat.getPosition())
+                .projectId(cat.getProjectId())
+                .build();
+    }
+
+    /**
+     * 删除项目级文档分类。仅可删除本项目下的分类；若该分类下仍有文档则不允许删除。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteDocumentCategory(Long projectId, Integer categoryId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        Enumeration cat = getProjectDocumentCategoryOrThrow(projectId, categoryId);
+        LambdaQueryWrapper<Document> docWrapper = new LambdaQueryWrapper<>();
+        docWrapper.eq(Document::getProjectId, projectId.intValue()).eq(Document::getCategoryId, categoryId);
+        if (documentMapper.selectCount(docWrapper) > 0) {
+            throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_IN_USE);
+        }
+        enumerationMapper.deleteById(categoryId);
+        log.info("项目级文档分类已删除: projectId={}, categoryId={}, name={}", projectId, categoryId, cat.getName());
+    }
+
+    /**
+     * 获取项目级文档分类，若不存在或为全局分类则抛异常（用于增删改时校验）。
+     */
+    private Enumeration getProjectDocumentCategoryOrThrow(Long projectId, Integer categoryId) {
+        Enumeration cat = enumerationMapper.selectById(categoryId);
+        if (cat == null) {
+            throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_NOT_FOUND);
+        }
+        if (!ENUM_TYPE_DOCUMENT_CATEGORY.equals(cat.getType())) {
+            throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_NOT_FOUND);
+        }
+        if (cat.getProjectId() == null) {
+            throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_NOT_EDITABLE);
+        }
+        if (!cat.getProjectId().equals(projectId.intValue())) {
+            throw new BusinessException(ResultCode.DOCUMENT_CATEGORY_NOT_FOUND);
+        }
+        return cat;
     }
 
     /**
