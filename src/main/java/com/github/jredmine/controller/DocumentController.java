@@ -3,18 +3,22 @@ package com.github.jredmine.controller;
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.document.DocumentDetailResponseDTO;
+import com.github.jredmine.dto.response.document.DocumentListItemResponseDTO;
 import com.github.jredmine.service.DocumentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -32,6 +36,19 @@ public class DocumentController {
 
     public DocumentController(DocumentService documentService) {
         this.documentService = documentService;
+    }
+
+    @Operation(summary = "文档分页列表", description = "分页列出项目文档，支持按 categoryId、keyword（标题/描述模糊）筛选，按创建时间倒序。需要 view_documents 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_documents')")
+    @GetMapping
+    public ApiResponse<PageResponse<DocumentListItemResponseDTO>> list(
+            @PathVariable Long projectId,
+            @RequestParam(value = "categoryId", required = false) Integer categoryId,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "20") Integer size) {
+        PageResponse<DocumentListItemResponseDTO> result = documentService.listDocuments(projectId, categoryId, keyword, current, size);
+        return ApiResponse.success(result);
     }
 
     @Operation(summary = "创建文档", description = "在项目下新增一条文档记录（title 必填，description、categoryId 可选；categoryId=0 表示未分类）。需项目已启用文档模块。需要 add_documents 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))

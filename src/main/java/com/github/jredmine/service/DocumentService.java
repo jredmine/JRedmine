@@ -3,8 +3,10 @@ package com.github.jredmine.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.document.DocumentCategoryResponseDTO;
 import com.github.jredmine.dto.response.document.DocumentDetailResponseDTO;
+import com.github.jredmine.dto.response.document.DocumentListItemResponseDTO;
 import com.github.jredmine.entity.Document;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.Enumeration;
@@ -16,11 +18,13 @@ import com.github.jredmine.mapper.DocumentMapper;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.workflow.EnumerationMapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -69,6 +73,40 @@ public class DocumentService {
                         .projectId(e.getProjectId())
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 文档分页列表：支持按 categoryId、keyword（title/description 模糊）筛选，按 created_on 倒序。
+     * 要求项目存在且已启用文档模块。
+     */
+    public PageResponse<DocumentListItemResponseDTO> listDocuments(Long projectId, Integer categoryId,
+            String keyword, Integer current, Integer size) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        LambdaQueryWrapper<Document> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Document::getProjectId, projectId.intValue());
+        if (categoryId != null && categoryId > 0) {
+            wrapper.eq(Document::getCategoryId, categoryId);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            String k = keyword.trim();
+            wrapper.and(w -> w.like(Document::getTitle, k).or().like(Document::getDescription, k));
+        }
+        wrapper.orderByDesc(Document::getCreatedOn);
+        int pageNum = (current != null && current > 0) ? current : 1;
+        int pageSize = (size != null && size > 0) ? size : 20;
+        Page<Document> page = new Page<>(pageNum, pageSize);
+        Page<Document> result = documentMapper.selectPage(page, wrapper);
+        List<DocumentListItemResponseDTO> list = new ArrayList<>();
+        for (Document doc : result.getRecords()) {
+            list.add(toListItemResponse(doc));
+        }
+        return PageResponse.of(list, result.getTotal(), result.getCurrent(), result.getSize());
     }
 
     /**
@@ -187,21 +225,34 @@ public class DocumentService {
         }
     }
 
-    private DocumentDetailResponseDTO toDetailResponse(Document doc, Long projectId) {
-        String categoryName = null;
-        if (doc.getCategoryId() != null && doc.getCategoryId() > 0) {
-            Enumeration cat = enumerationMapper.selectById(doc.getCategoryId());
-            if (cat != null && ENUM_TYPE_DOCUMENT_CATEGORY.equals(cat.getType())) {
-                categoryName = cat.getName();
-            }
+    private String resolveCategoryName(Integer categoryId) {
+        if (categoryId == null || categoryId <= 0) {
+            return null;
         }
+        Enumeration cat = enumerationMapper.selectById(categoryId);
+        return (cat != null && ENUM_TYPE_DOCUMENT_CATEGORY.equals(cat.getType())) ? cat.getName() : null;
+    }
+
+    private DocumentListItemResponseDTO toListItemResponse(Document doc) {
+        return DocumentListItemResponseDTO.builder()
+                .id(doc.getId())
+                .projectId(doc.getProjectId())
+                .title(doc.getTitle())
+                .description(doc.getDescription())
+                .categoryId(doc.getCategoryId())
+                .categoryName(resolveCategoryName(doc.getCategoryId()))
+                .createdOn(doc.getCreatedOn())
+                .build();
+    }
+
+    private DocumentDetailResponseDTO toDetailResponse(Document doc, Long projectId) {
         return DocumentDetailResponseDTO.builder()
                 .id(doc.getId())
                 .projectId(doc.getProjectId())
                 .title(doc.getTitle())
                 .description(doc.getDescription())
                 .categoryId(doc.getCategoryId())
-                .categoryName(categoryName)
+                .categoryName(resolveCategoryName(doc.getCategoryId()))
                 .createdOn(doc.getCreatedOn())
                 .build();
     }
