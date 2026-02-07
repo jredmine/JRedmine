@@ -51,6 +51,16 @@ public class DocumentController {
         return ApiResponse.success(result);
     }
 
+    @Operation(summary = "文档详情", description = "根据文档 ID 获取文档详情（含分类名称）。需项目已启用文档模块。需要 view_documents 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_documents')")
+    @GetMapping("/{documentId}")
+    public ApiResponse<DocumentDetailResponseDTO> getDetail(
+            @PathVariable Long projectId,
+            @PathVariable Integer documentId) {
+        DocumentDetailResponseDTO result = documentService.getDetail(projectId, documentId);
+        return ApiResponse.success(result);
+    }
+
     @Operation(summary = "创建文档", description = "在项目下新增一条文档记录（title 必填，description、categoryId 可选；categoryId=0 表示未分类）。需项目已启用文档模块。需要 add_documents 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'add_documents')")
     @PostMapping

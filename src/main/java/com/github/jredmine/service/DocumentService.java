@@ -1,9 +1,11 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.github.jredmine.dto.request.attachment.AttachmentQueryRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentCreateRequestDTO;
 import com.github.jredmine.dto.request.document.DocumentUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.attachment.AttachmentResponseDTO;
 import com.github.jredmine.dto.response.document.DocumentCategoryResponseDTO;
 import com.github.jredmine.dto.response.document.DocumentDetailResponseDTO;
 import com.github.jredmine.dto.response.document.DocumentListItemResponseDTO;
@@ -41,10 +43,14 @@ public class DocumentService {
 
     private static final String ENUM_TYPE_DOCUMENT_CATEGORY = "DocumentCategory";
 
+    private static final String CONTAINER_TYPE_DOCUMENT = "Document";
+    private static final int DETAIL_ATTACHMENT_PAGE_SIZE = 200;
+
     private final DocumentMapper documentMapper;
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectMapper projectMapper;
     private final EnumerationMapper enumerationMapper;
+    private final AttachmentService attachmentService;
 
     /**
      * 文档分类列表：某项目可用的文档分类（全局 + 当前项目），按 position、name 排序，供下拉/筛选。
@@ -192,6 +198,38 @@ public class DocumentService {
         documentMapper.updateById(doc);
         log.info("文档已更新: projectId={}, documentId={}", projectId, documentId);
         return toDetailResponse(doc, projectId.longValue());
+    }
+
+    /**
+     * 文档详情：按 documentId 返回文档信息（含分类名称）。
+     * 要求文档属于当前项目且项目已启用文档模块。
+     */
+    public DocumentDetailResponseDTO getDetail(Long projectId, Integer documentId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isDocumentsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.DOCUMENTS_NOT_ENABLED);
+        }
+        Document doc = getDocumentByProjectAndId(projectId, documentId);
+        DocumentDetailResponseDTO detail = toDetailResponse(doc, projectId.longValue());
+        fillAttachments(detail, documentId);
+        return detail;
+    }
+
+    /**
+     * 为文档详情填充附件数量与附件列表（仅详情接口使用）。
+     */
+    private void fillAttachments(DocumentDetailResponseDTO detail, Integer documentId) {
+        AttachmentQueryRequestDTO req = new AttachmentQueryRequestDTO();
+        req.setContainerType(CONTAINER_TYPE_DOCUMENT);
+        req.setContainerId(documentId.longValue());
+        req.setCurrent(1);
+        req.setSize(DETAIL_ATTACHMENT_PAGE_SIZE);
+        PageResponse<AttachmentResponseDTO> page = attachmentService.queryAttachments(req);
+        detail.setAttachmentCount(page.getTotal());
+        detail.setAttachments(page.getRecords());
     }
 
     /**
