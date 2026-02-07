@@ -56,6 +56,10 @@ public enum ResultCode {
     WIKI_REDIRECT_TITLE_EXISTS(409, "该标题已是重定向或已存在同名页面"),
     WIKI_REDIRECT_TARGET_NOT_FOUND(404, "重定向目标页面不存在"),
 
+    // 文档
+    DOCUMENTS_NOT_ENABLED(400, "项目未启用文档模块"),
+    DOCUMENT_CATEGORY_NOT_FOUND(400, "文档分类不存在或不可用于当前项目"),
+
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
 
