@@ -1,6 +1,8 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
@@ -13,6 +15,7 @@ import com.github.jredmine.enums.ProjectModule;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.BoardMapper;
+import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.mapper.MessageMapper;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
@@ -41,6 +44,7 @@ public class MessageService {
     private final ProjectMapper projectMapper;
     private final UserMapper userMapper;
     private final SecurityUtils securityUtils;
+    private final ProjectPermissionService projectPermissionService;
 
     /**
      * 发主题：在板块下新增一条 parent_id 为空的 message，并更新板块的 topics_count、messages_count、last_message_id。
@@ -127,6 +131,83 @@ public class MessageService {
         boardMapper.updateById(board);
         log.info("论坛回复已创建: projectId={}, boardId={}, topicId={}, replyId={}", projectId, boardId, topicMessageId, reply.getId());
         return toMessageDetailResponse(reply);
+    }
+
+    /**
+     * 更新消息：仅更新请求体中提供的非空字段。
+     * 权限：当前用户为消息作者或拥有 manage_boards；否则 403。
+     * subject、locked、sticky 仅对主题帖（parent_id 为空）有效，回复只更新 content。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public MessageDetailResponseDTO updateMessage(Long projectId, Integer boardId, Integer messageId, MessageUpdateRequestDTO dto) {
+        if (dto == null) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "请求体不能为空");
+        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        getBoardByProjectAndId(projectId, boardId);
+        Message message = getMessageByBoardAndIdOrThrow(boardId, messageId);
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAuthor = message.getAuthorId() != null && message.getAuthorId().equals(currentUserId.intValue());
+        boolean hasManageBoards = projectPermissionService.hasPermission(currentUserId, projectId, "manage_boards");
+        if (!isAuthor && !hasManageBoards) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权限编辑该消息");
+        }
+        boolean isTopic = message.getParentId() == null;
+        boolean subjectChanged = false;
+        String newSubject = null;
+        boolean changed = false;
+        if (dto.getSubject() != null && isTopic) {
+            newSubject = dto.getSubject().trim();
+            message.setSubject(newSubject);
+            subjectChanged = true;
+            changed = true;
+        }
+        if (dto.getContent() != null) {
+            message.setContent(dto.getContent());
+            changed = true;
+        }
+        if (dto.getLocked() != null && isTopic) {
+            message.setLocked(dto.getLocked());
+            changed = true;
+        }
+        if (dto.getSticky() != null && isTopic) {
+            message.setSticky(dto.getSticky());
+            changed = true;
+        }
+        if (changed) {
+            Date now = new Date();
+            message.setUpdatedOn(now);
+            messageMapper.updateById(message);
+            // 主题标题变更时，级联更新该主题下所有回复的 subject，保持与主题一致
+            if (subjectChanged && newSubject != null) {
+                Message replyUpdate = new Message();
+                replyUpdate.setSubject(newSubject);
+                replyUpdate.setUpdatedOn(now);
+                LambdaUpdateWrapper<Message> wrapper = new LambdaUpdateWrapper<>();
+                wrapper.eq(Message::getParentId, messageId);
+                messageMapper.update(replyUpdate, wrapper);
+            }
+        }
+        Message updated = messageMapper.selectById(messageId);
+        log.info("论坛消息已更新: projectId={}, boardId={}, messageId={}, subjectCascaded={}", projectId, boardId, messageId, subjectChanged);
+        return toMessageDetailResponse(updated);
+    }
+
+    /**
+     * 根据板块 ID 和消息 ID 获取消息，不属于该板块则抛 MESSAGE_NOT_FOUND。
+     */
+    private Message getMessageByBoardAndIdOrThrow(Integer boardId, Integer messageId) {
+        Message message = messageMapper.selectById(messageId);
+        if (message == null || !message.getBoardId().equals(boardId)) {
+            throw new BusinessException(ResultCode.MESSAGE_NOT_FOUND);
+        }
+        return message;
     }
 
     /**

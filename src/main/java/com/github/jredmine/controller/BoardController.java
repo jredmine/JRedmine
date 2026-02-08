@@ -2,6 +2,7 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.board.BoardCreateRequestDTO;
 import com.github.jredmine.dto.request.board.BoardUpdateRequestDTO;
+import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
@@ -83,6 +84,18 @@ public class BoardController {
             @Valid @RequestBody ReplyCreateRequestDTO request) {
         MessageDetailResponseDTO result = messageService.createReply(projectId, boardId, messageId, request);
         return ApiResponse.success("回复成功", result);
+    }
+
+    @Operation(summary = "更新消息", description = "更新主题或回复（subject、content、locked、sticky 均可选）。本人需 edit_messages 权限，或拥有 manage_boards 可编辑任意消息。subject、locked、sticky 仅对主题帖有效。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'edit_messages') or hasPermission(#projectId, 'Project', 'manage_boards')")
+    @PutMapping("/{boardId}/messages/{messageId}")
+    public ApiResponse<MessageDetailResponseDTO> updateMessage(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @RequestBody(required = false) MessageUpdateRequestDTO request) {
+        MessageDetailResponseDTO result = messageService.updateMessage(projectId, boardId, messageId, request);
+        return ApiResponse.success("消息更新成功", result);
     }
 
     @Operation(summary = "创建板块", description = "在项目下新增一个论坛板块（name 必填，description、position、parentId 可选）。需项目已启用论坛模块；同项目下板块名称不可重复。需要 manage_boards 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
