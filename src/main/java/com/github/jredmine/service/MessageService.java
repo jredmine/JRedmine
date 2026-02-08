@@ -281,6 +281,68 @@ public class MessageService {
     }
 
     /**
+     * 删除消息：主题会级联删除其下所有回复；回复仅删本条。
+     * 权限：当前用户为消息作者或拥有 manage_boards；否则 403。
+     * 同时维护板块的 topics_count、messages_count、last_message_id 及主题的 replies_count、last_reply_id。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteMessage(Long projectId, Integer boardId, Integer messageId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        Board board = getBoardByProjectAndId(projectId, boardId);
+        Message message = getMessageByBoardAndIdOrThrow(boardId, messageId);
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAuthor = message.getAuthorId() != null && message.getAuthorId().equals(currentUserId.intValue());
+        boolean hasManageBoards = projectPermissionService.hasPermission(currentUserId, projectId, "manage_boards");
+        if (!isAuthor && !hasManageBoards) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除该消息");
+        }
+        boolean isTopic = message.getParentId() == null;
+        if (isTopic) {
+            // 主题：先删该主题下所有回复，再删主题
+            LambdaQueryWrapper<Message> replyWrapper = new LambdaQueryWrapper<>();
+            replyWrapper.eq(Message::getBoardId, boardId).eq(Message::getParentId, messageId);
+            int replyCount = messageMapper.selectCount(replyWrapper).intValue();
+            messageMapper.delete(replyWrapper);
+            messageMapper.deleteById(messageId);
+            board.setTopicsCount(Math.max(0, (board.getTopicsCount() != null ? board.getTopicsCount() : 0) - 1));
+            board.setMessagesCount(Math.max(0, (board.getMessagesCount() != null ? board.getMessagesCount() : 0) - 1 - replyCount));
+        } else {
+            // 回复：删本条，并更新主题的 replies_count、last_reply_id
+            Integer topicId = message.getParentId();
+            Message topic = messageMapper.selectById(topicId);
+            messageMapper.deleteById(messageId);
+            if (topic != null) {
+                int newRepliesCount = Math.max(0, (topic.getRepliesCount() != null ? topic.getRepliesCount() : 0) - 1);
+                topic.setRepliesCount(newRepliesCount);
+                if (messageId.equals(topic.getLastReplyId())) {
+                    LambdaQueryWrapper<Message> prevReply = new LambdaQueryWrapper<>();
+                    prevReply.eq(Message::getParentId, topicId).lt(Message::getId, messageId).orderByDesc(Message::getId).last("LIMIT 1");
+                    Message prev = messageMapper.selectOne(prevReply);
+                    topic.setLastReplyId(prev != null ? prev.getId() : null);
+                }
+                topic.setUpdatedOn(new Date());
+                messageMapper.updateById(topic);
+            }
+            board.setMessagesCount(Math.max(0, (board.getMessagesCount() != null ? board.getMessagesCount() : 0) - 1));
+        }
+        // 若被删的是板块的最后一条消息，则重算 last_message_id
+        if (messageId.equals(board.getLastMessageId())) {
+            LambdaQueryWrapper<Message> lastWrapper = new LambdaQueryWrapper<>();
+            lastWrapper.eq(Message::getBoardId, boardId).orderByDesc(Message::getId).last("LIMIT 1");
+            Message last = messageMapper.selectOne(lastWrapper);
+            board.setLastMessageId(last != null ? last.getId() : null);
+        }
+        boardMapper.updateById(board);
+        log.info("论坛消息已删除: projectId={}, boardId={}, messageId={}, isTopic={}", projectId, boardId, messageId, isTopic);
+    }
+
+    /**
      * 根据板块 ID 和消息 ID 获取消息，不属于该板块则抛 MESSAGE_NOT_FOUND。
      */
     private Message getMessageByBoardAndIdOrThrow(Integer boardId, Integer messageId) {

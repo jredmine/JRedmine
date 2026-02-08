@@ -128,6 +128,17 @@ public class BoardController {
         return ApiResponse.success("消息更新成功", result);
     }
 
+    @Operation(summary = "删除消息", description = "删除主题时会级联删除其下所有回复；删除回复仅删该条。本人需 delete_messages 权限，或拥有 manage_boards 可删除任意消息。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'delete_messages') or hasPermission(#projectId, 'Project', 'manage_boards')")
+    @DeleteMapping("/{boardId}/messages/{messageId}")
+    public ApiResponse<Void> deleteMessage(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId) {
+        messageService.deleteMessage(projectId, boardId, messageId);
+        return ApiResponse.success();
+    }
+
     @Operation(summary = "创建板块", description = "在项目下新增一个论坛板块（name 必填，description、position、parentId 可选）。需项目已启用论坛模块；同项目下板块名称不可重复。需要 manage_boards 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_boards')")
     @PostMapping
