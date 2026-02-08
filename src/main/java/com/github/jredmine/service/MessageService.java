@@ -1,6 +1,7 @@
 package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
 import com.github.jredmine.entity.Board;
@@ -25,7 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Date;
 
 /**
- * 论坛消息/主题服务：发主题、回复、更新、删除等（本期实现发主题）
+ * 论坛消息/主题服务：发主题、回复、更新、删除等
  *
  * @author panfeng
  */
@@ -79,6 +80,64 @@ public class MessageService {
         boardMapper.updateById(board);
         log.info("论坛主题已创建: projectId={}, boardId={}, messageId={}, subject={}", projectId, boardId, message.getId(), subject);
         return toMessageDetailResponse(message);
+    }
+
+    /**
+     * 回复主题：在主题下新增一条 parent_id=主题id 的 message，并更新主题的 replies_count、last_reply_id 及板块的 messages_count、last_message_id。
+     * 若主题已锁定则禁止回复。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public MessageDetailResponseDTO createReply(Long projectId, Integer boardId, Integer topicMessageId, ReplyCreateRequestDTO dto) {
+        if (dto == null || dto.getContent() == null || dto.getContent().isBlank()) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "回复内容不能为空");
+        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        Board board = getBoardByProjectAndId(projectId, boardId);
+        Message topic = getTopicMessageOrThrow(boardId, topicMessageId);
+        if (Boolean.TRUE.equals(topic.getLocked())) {
+            throw new BusinessException(ResultCode.MESSAGE_TOPIC_LOCKED);
+        }
+        Long currentUserId = securityUtils.getCurrentUserId();
+        String content = dto.getContent().trim();
+        Date now = new Date();
+        Message reply = new Message();
+        reply.setBoardId(boardId);
+        reply.setParentId(topicMessageId);
+        reply.setSubject(topic.getSubject() != null ? topic.getSubject() : "");
+        reply.setContent(content);
+        reply.setAuthorId(currentUserId.intValue());
+        reply.setRepliesCount(0);
+        reply.setCreatedOn(now);
+        reply.setUpdatedOn(now);
+        reply.setLocked(false);
+        reply.setSticky(0);
+        messageMapper.insert(reply);
+        topic.setRepliesCount((topic.getRepliesCount() != null ? topic.getRepliesCount() : 0) + 1);
+        topic.setLastReplyId(reply.getId());
+        topic.setUpdatedOn(now);
+        messageMapper.updateById(topic);
+        board.setMessagesCount((board.getMessagesCount() != null ? board.getMessagesCount() : 0) + 1);
+        board.setLastMessageId(reply.getId());
+        boardMapper.updateById(board);
+        log.info("论坛回复已创建: projectId={}, boardId={}, topicId={}, replyId={}", projectId, boardId, topicMessageId, reply.getId());
+        return toMessageDetailResponse(reply);
+    }
+
+    /**
+     * 获取主题消息（parent_id 为空且属于该板块），否则抛 MESSAGE_NOT_FOUND。
+     */
+    private Message getTopicMessageOrThrow(Integer boardId, Integer messageId) {
+        Message message = messageMapper.selectById(messageId);
+        if (message == null || !message.getBoardId().equals(boardId) || message.getParentId() != null) {
+            throw new BusinessException(ResultCode.MESSAGE_NOT_FOUND);
+        }
+        return message;
     }
 
     private boolean isBoardsEnabledForProject(Long projectId) {

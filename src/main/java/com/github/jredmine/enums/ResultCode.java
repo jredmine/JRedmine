@@ -70,6 +70,10 @@ public enum ResultCode {
     BOARD_NAME_EXISTS(409, "该项目下已存在同名板块"),
     BOARD_HAS_MESSAGES(400, "板块下仍有消息，无法删除"),
 
+    // 论坛消息
+    MESSAGE_NOT_FOUND(404, "主题或消息不存在"),
+    MESSAGE_TOPIC_LOCKED(400, "主题已锁定，无法回复"),
+
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
 
