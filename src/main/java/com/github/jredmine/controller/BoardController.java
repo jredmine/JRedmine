@@ -45,6 +45,16 @@ public class BoardController {
         return ApiResponse.success(list);
     }
 
+    @Operation(summary = "板块详情", description = "根据板块 ID 获取板块详情（含主题数、消息总数、最后消息 ID 等统计）。需项目已启用论坛模块。需要 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @GetMapping("/{boardId}")
+    public ApiResponse<BoardDetailResponseDTO> getDetail(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId) {
+        BoardDetailResponseDTO result = boardService.getDetail(projectId, boardId);
+        return ApiResponse.success(result);
+    }
+
     @Operation(summary = "创建板块", description = "在项目下新增一个论坛板块（name 必填，description、position、parentId 可选）。需项目已启用论坛模块；同项目下板块名称不可重复。需要 manage_boards 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
     @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_boards')")
     @PostMapping

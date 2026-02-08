@@ -59,6 +59,22 @@ public class BoardService {
     }
 
     /**
+     * 板块详情（含统计）：按 boardId 返回板块信息及 topicsCount、messagesCount、lastMessageId。
+     * 要求板块属于当前项目且项目已启用论坛模块。
+     */
+    public BoardDetailResponseDTO getDetail(Long projectId, Integer boardId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        Board board = getBoardByProjectAndId(projectId, boardId);
+        return toDetailResponse(board);
+    }
+
+    /**
      * 检查项目是否启用了论坛模块
      */
     public boolean isBoardsEnabledForProject(Long projectId) {
