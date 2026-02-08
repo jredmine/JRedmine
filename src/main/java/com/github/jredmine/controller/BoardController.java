@@ -12,6 +12,7 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
 import com.github.jredmine.dto.response.activity.CommentResponseDTO;
+import com.github.jredmine.dto.response.attachment.AttachmentResponseDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
@@ -31,6 +32,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import org.springframework.http.MediaType;
+import io.swagger.v3.oas.annotations.Parameter;
 
 import java.util.List;
 
@@ -189,6 +194,44 @@ public class BoardController {
             @PathVariable Integer messageId,
             @PathVariable Long commentId) {
         messageService.deleteMessageComment(projectId, boardId, messageId, commentId);
+        return ApiResponse.success();
+    }
+
+    @Operation(summary = "消息附件列表", description = "分页查询某条消息下的附件。需 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @GetMapping("/{boardId}/messages/{messageId}/attachments")
+    public ApiResponse<PageResponse<AttachmentResponseDTO>> listMessageAttachments(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "100") Integer size) {
+        PageResponse<AttachmentResponseDTO> result = messageService.listMessageAttachments(projectId, boardId, messageId, current, size);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "上传消息附件", description = "为某条消息上传附件。需 add_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'add_messages')")
+    @PostMapping(value = "/{boardId}/messages/{messageId}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<AttachmentResponseDTO> uploadMessageAttachment(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @Parameter(description = "上传的文件", required = true) @RequestParam("file") MultipartFile file,
+            @Parameter(description = "文件描述") @RequestParam(value = "description", required = false) String description) {
+        AttachmentResponseDTO result = messageService.uploadMessageAttachment(projectId, boardId, messageId, file, description);
+        return ApiResponse.success("附件上传成功", result);
+    }
+
+    @Operation(summary = "删除消息附件", description = "删除某条消息下的附件（仅附件上传者或 manage_boards 可操作）。需 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @DeleteMapping("/{boardId}/messages/{messageId}/attachments/{attachmentId}")
+    public ApiResponse<Void> deleteMessageAttachment(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @PathVariable Long attachmentId) {
+        messageService.deleteMessageAttachment(projectId, boardId, messageId, attachmentId);
         return ApiResponse.success();
     }
 

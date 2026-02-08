@@ -462,6 +462,32 @@ public class AttachmentService {
     }
 
     /**
+     * 按容器校验后删除指定附件（含物理文件）。仅当附件的 container 与参数一致时删除，不做作者权限校验，由调用方保证权限。
+     * 用于项目内按容器管理的删除（如消息附件：调用方已校验 manage_boards 或附件作者）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteAttachmentIfBelongsToContainer(String containerType, Long containerId, Long attachmentId) {
+        Attachment attachment = attachmentMapper.selectById(attachmentId);
+        if (attachment == null) {
+            throw new BusinessException("附件不存在");
+        }
+        if (!containerType.equals(attachment.getContainerType()) || attachment.getContainerId() == null
+                || !attachment.getContainerId().equals(containerId)) {
+            throw new BusinessException("附件不属于该容器");
+        }
+        attachmentMapper.deleteById(attachmentId);
+        deletePhysicalFile(attachment);
+        log.info("删除附件成功（按容器校验）: id={}, containerType={}, containerId={}", attachmentId, containerType, containerId);
+    }
+
+    /**
+     * 根据 ID 获取附件实体（供内部权限/归属校验使用）
+     */
+    public Attachment getAttachmentEntity(Long id) {
+        return attachmentMapper.selectById(id);
+    }
+
+    /**
      * 按容器删除所有附件（含物理文件）。用于删除文档/任务等时级联删除附件，不做按作者的权限校验，由调用方保证权限。
      */
     @Transactional(rollbackFor = Exception.class)

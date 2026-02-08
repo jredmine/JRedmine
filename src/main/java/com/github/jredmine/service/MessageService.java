@@ -9,12 +9,16 @@ import com.github.jredmine.dto.request.board.MessageCommentCreateRequestDTO;
 import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
+import com.github.jredmine.dto.request.attachment.AttachmentQueryRequestDTO;
+import com.github.jredmine.dto.request.attachment.AttachmentUploadRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.activity.CommentResponseDTO;
+import com.github.jredmine.dto.response.attachment.AttachmentResponseDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageReplyListItemResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
+import com.github.jredmine.entity.Attachment;
 import com.github.jredmine.entity.Board;
 import com.github.jredmine.entity.Comment;
 import com.github.jredmine.entity.EnabledModule;
@@ -36,6 +40,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -60,6 +65,7 @@ public class MessageService {
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
     private final CommentMapper commentMapper;
+    private final AttachmentService attachmentService;
 
     /**
      * 发主题：在板块下新增一条 parent_id 为空的 message，并更新板块的 topics_count、messages_count、last_message_id。
@@ -311,22 +317,25 @@ public class MessageService {
         }
         boolean isTopic = message.getParentId() == null;
         if (isTopic) {
-            // 主题：先删该主题下所有回复及其评论，再删主题及其评论
+            // 主题：先删该主题下所有回复的评论、附件，再删主题的评论、附件，再删回复与主题
             LambdaQueryWrapper<Message> replyWrapper = new LambdaQueryWrapper<>();
             replyWrapper.eq(Message::getBoardId, boardId).eq(Message::getParentId, messageId);
             List<Message> replies = messageMapper.selectList(replyWrapper);
             int replyCount = replies.size();
             for (Message reply : replies) {
                 deleteCommentsForMessage(reply.getId());
+                attachmentService.deleteAttachmentsByContainer("Message", reply.getId().longValue());
             }
-            messageMapper.delete(replyWrapper);
             deleteCommentsForMessage(messageId);
+            attachmentService.deleteAttachmentsByContainer("Message", messageId.longValue());
+            messageMapper.delete(replyWrapper);
             messageMapper.deleteById(messageId);
             board.setTopicsCount(Math.max(0, (board.getTopicsCount() != null ? board.getTopicsCount() : 0) - 1));
             board.setMessagesCount(Math.max(0, (board.getMessagesCount() != null ? board.getMessagesCount() : 0) - 1 - replyCount));
         } else {
-            // 回复：删本条及其评论，并更新主题的 replies_count、last_reply_id
+            // 回复：删本条评论与附件，再删回复并更新主题
             deleteCommentsForMessage(messageId);
+            attachmentService.deleteAttachmentsByContainer("Message", messageId.longValue());
             Integer topicId = message.getParentId();
             Message topic = messageMapper.selectById(topicId);
             messageMapper.deleteById(messageId);
@@ -435,6 +444,54 @@ public class MessageService {
         }
         commentMapper.deleteById(comment.getId());
         log.info("消息评论已删除: projectId={}, messageId={}, commentId={}", projectId, messageId, commentId);
+    }
+
+    /**
+     * 消息附件列表（containerType=Message, containerId=messageId）。要求项目存在、已启用论坛、板块与消息有效。
+     */
+    public PageResponse<AttachmentResponseDTO> listMessageAttachments(Long projectId, Integer boardId, Integer messageId,
+            Integer current, Integer size) {
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        AttachmentQueryRequestDTO query = new AttachmentQueryRequestDTO();
+        query.setContainerType("Message");
+        query.setContainerId(messageId.longValue());
+        query.setCurrent(current != null && current > 0 ? current : 1);
+        query.setSize(size != null && size > 0 ? size : 100);
+        return attachmentService.queryAttachments(query);
+    }
+
+    /**
+     * 为消息上传附件。要求项目存在、已启用论坛、板块与消息有效。
+     */
+    public AttachmentResponseDTO uploadMessageAttachment(Long projectId, Integer boardId, Integer messageId,
+            MultipartFile file, String description) {
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        AttachmentUploadRequestDTO request = new AttachmentUploadRequestDTO();
+        request.setContainerType("Message");
+        request.setContainerId(messageId.longValue());
+        request.setDescription(description);
+        AttachmentResponseDTO result = attachmentService.uploadAttachment(file, request);
+        log.info("消息附件已上传: projectId={}, boardId={}, messageId={}, attachmentId={}", projectId, boardId, messageId, result.getId());
+        return result;
+    }
+
+    /**
+     * 删除消息下的某条附件。仅附件上传者或拥有 manage_boards 可删除。
+     */
+    public void deleteMessageAttachment(Long projectId, Integer boardId, Integer messageId, Long attachmentId) {
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        Attachment attachment = attachmentService.getAttachmentEntity(attachmentId);
+        if (attachment == null || !"Message".equals(attachment.getContainerType())
+                || attachment.getContainerId() == null || !attachment.getContainerId().equals(messageId.longValue())) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "附件不存在或不属于该消息");
+        }
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAuthor = attachment.getAuthorId() != null && attachment.getAuthorId().equals(currentUserId);
+        boolean hasManage = projectPermissionService.hasPermission(currentUserId, projectId, "manage_boards");
+        if (!isAuthor && !hasManage) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除该附件");
+        }
+        attachmentService.deleteAttachmentIfBelongsToContainer("Message", messageId.longValue(), attachmentId);
     }
 
     private void validateProjectBoardMessage(Long projectId, Integer boardId, Integer messageId) {
