@@ -1,0 +1,43 @@
+package com.github.jredmine.controller;
+
+import com.github.jredmine.dto.request.board.BoardCreateRequestDTO;
+import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
+import com.github.jredmine.service.BoardService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 论坛板块控制器
+ *
+ * @author panfeng
+ */
+@Tag(name = "论坛板块", description = "项目论坛板块的创建、列表、详情、更新、删除")
+@RestController
+@RequestMapping("/api/projects/{projectId}/boards")
+public class BoardController {
+
+    private final BoardService boardService;
+
+    public BoardController(BoardService boardService) {
+        this.boardService = boardService;
+    }
+
+    @Operation(summary = "创建板块", description = "在项目下新增一个论坛板块（name 必填，description、position、parentId 可选）。需项目已启用论坛模块；同项目下板块名称不可重复。需要 manage_boards 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_boards')")
+    @PostMapping
+    public ApiResponse<BoardDetailResponseDTO> create(
+            @PathVariable Long projectId,
+            @Valid @RequestBody BoardCreateRequestDTO request) {
+        BoardDetailResponseDTO result = boardService.create(projectId, request);
+        return ApiResponse.success("板块创建成功", result);
+    }
+}

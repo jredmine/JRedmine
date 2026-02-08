@@ -64,6 +64,11 @@ public enum ResultCode {
     DOCUMENT_CATEGORY_NOT_EDITABLE(400, "仅可编辑或删除项目级分类，不可操作全局分类"),
     DOCUMENT_NOT_FOUND(404, "文档不存在"),
 
+    // 论坛
+    BOARDS_NOT_ENABLED(400, "项目未启用论坛模块"),
+    BOARD_NOT_FOUND(404, "论坛板块不存在"),
+    BOARD_NAME_EXISTS(409, "该项目下已存在同名板块"),
+
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),
 
