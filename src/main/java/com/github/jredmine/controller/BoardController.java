@@ -1,7 +1,9 @@
 package com.github.jredmine.controller;
 
+import com.github.jredmine.dto.request.activity.CommentUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.BoardCreateRequestDTO;
 import com.github.jredmine.dto.request.board.BoardUpdateRequestDTO;
+import com.github.jredmine.dto.request.board.MessageCommentCreateRequestDTO;
 import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
@@ -9,6 +11,7 @@ import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
+import com.github.jredmine.dto.response.activity.CommentResponseDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
@@ -136,6 +139,56 @@ public class BoardController {
             @PathVariable Integer boardId,
             @PathVariable Integer messageId) {
         messageService.deleteMessage(projectId, boardId, messageId);
+        return ApiResponse.success();
+    }
+
+    @Operation(summary = "消息评论列表", description = "分页查询某条消息下的评论，按创建时间倒序。需 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @GetMapping("/{boardId}/messages/{messageId}/comments")
+    public ApiResponse<PageResponse<CommentResponseDTO>> listMessageComments(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "20") Integer size) {
+        PageResponse<CommentResponseDTO> result = messageService.listMessageComments(projectId, boardId, messageId, current, size);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "添加消息评论", description = "为某条消息添加评论。需 add_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'add_messages')")
+    @PostMapping("/{boardId}/messages/{messageId}/comments")
+    public ApiResponse<CommentResponseDTO> addMessageComment(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @Valid @RequestBody MessageCommentCreateRequestDTO request) {
+        CommentResponseDTO result = messageService.addMessageComment(projectId, boardId, messageId, request);
+        return ApiResponse.success("评论成功", result);
+    }
+
+    @Operation(summary = "更新消息评论", description = "更新某条消息下的评论（仅评论作者或管理员可操作）。需 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @PutMapping("/{boardId}/messages/{messageId}/comments/{commentId}")
+    public ApiResponse<CommentResponseDTO> updateMessageComment(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @PathVariable Long commentId,
+            @Valid @RequestBody CommentUpdateRequestDTO request) {
+        CommentResponseDTO result = messageService.updateMessageComment(projectId, boardId, messageId, commentId, request);
+        return ApiResponse.success("评论已更新", result);
+    }
+
+    @Operation(summary = "删除消息评论", description = "删除某条消息下的评论（仅评论作者或管理员可操作）。需 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @DeleteMapping("/{boardId}/messages/{messageId}/comments/{commentId}")
+    public ApiResponse<Void> deleteMessageComment(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @PathVariable Long commentId) {
+        messageService.deleteMessageComment(projectId, boardId, messageId, commentId);
         return ApiResponse.success();
     }
 

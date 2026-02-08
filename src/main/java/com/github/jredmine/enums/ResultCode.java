@@ -73,6 +73,7 @@ public enum ResultCode {
     // 论坛消息
     MESSAGE_NOT_FOUND(404, "主题或消息不存在"),
     MESSAGE_TOPIC_LOCKED(400, "主题已锁定，无法回复"),
+    COMMENT_NOT_FOUND(404, "评论不存在或不属于该消息"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),

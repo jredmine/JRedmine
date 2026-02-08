@@ -4,15 +4,19 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.jredmine.dto.request.activity.CommentUpdateRequestDTO;
+import com.github.jredmine.dto.request.board.MessageCommentCreateRequestDTO;
 import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
+import com.github.jredmine.dto.response.activity.CommentResponseDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageReplyListItemResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
 import com.github.jredmine.entity.Board;
+import com.github.jredmine.entity.Comment;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.Message;
 import com.github.jredmine.entity.Project;
@@ -21,8 +25,9 @@ import com.github.jredmine.enums.ProjectModule;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.BoardMapper;
-import com.github.jredmine.security.ProjectPermissionService;
+import com.github.jredmine.mapper.CommentMapper;
 import com.github.jredmine.mapper.MessageMapper;
+import com.github.jredmine.security.ProjectPermissionService;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import com.github.jredmine.mapper.user.UserMapper;
@@ -32,6 +37,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -53,6 +59,7 @@ public class MessageService {
     private final UserMapper userMapper;
     private final SecurityUtils securityUtils;
     private final ProjectPermissionService projectPermissionService;
+    private final CommentMapper commentMapper;
 
     /**
      * 发主题：在板块下新增一条 parent_id 为空的 message，并更新板块的 topics_count、messages_count、last_message_id。
@@ -304,16 +311,22 @@ public class MessageService {
         }
         boolean isTopic = message.getParentId() == null;
         if (isTopic) {
-            // 主题：先删该主题下所有回复，再删主题
+            // 主题：先删该主题下所有回复及其评论，再删主题及其评论
             LambdaQueryWrapper<Message> replyWrapper = new LambdaQueryWrapper<>();
             replyWrapper.eq(Message::getBoardId, boardId).eq(Message::getParentId, messageId);
-            int replyCount = messageMapper.selectCount(replyWrapper).intValue();
+            List<Message> replies = messageMapper.selectList(replyWrapper);
+            int replyCount = replies.size();
+            for (Message reply : replies) {
+                deleteCommentsForMessage(reply.getId());
+            }
             messageMapper.delete(replyWrapper);
+            deleteCommentsForMessage(messageId);
             messageMapper.deleteById(messageId);
             board.setTopicsCount(Math.max(0, (board.getTopicsCount() != null ? board.getTopicsCount() : 0) - 1));
             board.setMessagesCount(Math.max(0, (board.getMessagesCount() != null ? board.getMessagesCount() : 0) - 1 - replyCount));
         } else {
-            // 回复：删本条，并更新主题的 replies_count、last_reply_id
+            // 回复：删本条及其评论，并更新主题的 replies_count、last_reply_id
+            deleteCommentsForMessage(messageId);
             Integer topicId = message.getParentId();
             Message topic = messageMapper.selectById(topicId);
             messageMapper.deleteById(messageId);
@@ -340,6 +353,136 @@ public class MessageService {
         }
         boardMapper.updateById(board);
         log.info("论坛消息已删除: projectId={}, boardId={}, messageId={}, isTopic={}", projectId, boardId, messageId, isTopic);
+    }
+
+    /**
+     * 消息评论分页列表（comments 表）。要求项目存在、已启用论坛、板块与消息有效。
+     */
+    public PageResponse<CommentResponseDTO> listMessageComments(Long projectId, Integer boardId, Integer messageId,
+            Integer current, Integer size) {
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        LambdaQueryWrapper<Comment> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Comment::getCommentedType, "Message")
+                .eq(Comment::getCommentedId, messageId)
+                .orderByDesc(Comment::getId);
+        int pageNum = (current != null && current > 0) ? current : 1;
+        int pageSize = (size != null && size > 0) ? size : 20;
+        Page<Comment> page = new Page<>(pageNum, pageSize);
+        IPage<Comment> result = commentMapper.selectPage(page, wrapper);
+        List<CommentResponseDTO> list = new ArrayList<>();
+        for (Comment c : result.getRecords()) {
+            list.add(toCommentResponseDTO(c));
+        }
+        return PageResponse.of(list, (int) result.getTotal(), (int) result.getCurrent(), (int) result.getSize());
+    }
+
+    /**
+     * 为消息添加评论（写入 comments 表）。要求项目存在、已启用论坛、板块与消息有效。
+     */
+    public CommentResponseDTO addMessageComment(Long projectId, Integer boardId, Integer messageId,
+            MessageCommentCreateRequestDTO dto) {
+        if (dto == null || dto.getNotes() == null || dto.getNotes().isBlank()) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "评论内容不能为空");
+        }
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        Long currentUserId = securityUtils.getCurrentUserId();
+        LocalDateTime now = LocalDateTime.now();
+        Comment comment = new Comment();
+        comment.setCommentedType("Message");
+        comment.setCommentedId(messageId);
+        comment.setAuthorId(currentUserId.intValue());
+        comment.setContent(dto.getNotes().trim());
+        comment.setCreatedOn(now);
+        comment.setUpdatedOn(now);
+        commentMapper.insert(comment);
+        log.info("消息评论已添加: projectId={}, boardId={}, messageId={}, commentId={}", projectId, boardId, messageId, comment.getId());
+        return toCommentResponseDTO(comment);
+    }
+
+    /**
+     * 更新消息下的某条评论。仅评论作者或拥有 manage_boards 可更新。
+     */
+    public CommentResponseDTO updateMessageComment(Long projectId, Integer boardId, Integer messageId, Long commentId,
+            CommentUpdateRequestDTO dto) {
+        if (dto == null || dto.getNotes() == null || dto.getNotes().isBlank()) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "评论内容不能为空");
+        }
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        Comment comment = ensureCommentBelongsToMessage(commentId, messageId);
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAuthor = comment.getAuthorId() != null && comment.getAuthorId().equals(currentUserId.intValue());
+        boolean hasManage = projectPermissionService.hasPermission(currentUserId, projectId, "manage_boards");
+        if (!isAuthor && !hasManage) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权限编辑该评论");
+        }
+        comment.setContent(dto.getNotes().trim());
+        comment.setUpdatedOn(LocalDateTime.now());
+        commentMapper.updateById(comment);
+        return toCommentResponseDTO(commentMapper.selectById(comment.getId()));
+    }
+
+    /**
+     * 删除消息下的某条评论。仅评论作者或拥有 manage_boards 可删除。
+     */
+    public void deleteMessageComment(Long projectId, Integer boardId, Integer messageId, Long commentId) {
+        validateProjectBoardMessage(projectId, boardId, messageId);
+        Comment comment = ensureCommentBelongsToMessage(commentId, messageId);
+        Long currentUserId = securityUtils.getCurrentUserId();
+        boolean isAuthor = comment.getAuthorId() != null && comment.getAuthorId().equals(currentUserId.intValue());
+        boolean hasManage = projectPermissionService.hasPermission(currentUserId, projectId, "manage_boards");
+        if (!isAuthor && !hasManage) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权限删除该评论");
+        }
+        commentMapper.deleteById(comment.getId());
+        log.info("消息评论已删除: projectId={}, messageId={}, commentId={}", projectId, messageId, commentId);
+    }
+
+    private void validateProjectBoardMessage(Long projectId, Integer boardId, Integer messageId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        getBoardByProjectAndId(projectId, boardId);
+        getMessageByBoardAndIdOrThrow(boardId, messageId);
+    }
+
+    /** 校验评论属于该消息，否则抛 COMMENT_NOT_FOUND；通过时返回 Comment。 */
+    private Comment ensureCommentBelongsToMessage(Long commentId, Integer messageId) {
+        Comment comment = (commentId != null) ? commentMapper.selectById(commentId.intValue()) : null;
+        if (comment == null || !"Message".equals(comment.getCommentedType())
+                || comment.getCommentedId() == null || !comment.getCommentedId().equals(messageId)) {
+            throw new BusinessException(ResultCode.COMMENT_NOT_FOUND);
+        }
+        return comment;
+    }
+
+    /** 删除某条消息下的所有评论（comments 表） */
+    private void deleteCommentsForMessage(Integer messageId) {
+        LambdaQueryWrapper<Comment> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Comment::getCommentedType, "Message").eq(Comment::getCommentedId, messageId);
+        commentMapper.delete(wrapper);
+    }
+
+    private CommentResponseDTO toCommentResponseDTO(Comment comment) {
+        if (comment == null) return null;
+        User author = comment.getAuthorId() != null ? userMapper.selectById(comment.getAuthorId().longValue()) : null;
+        return CommentResponseDTO.builder()
+                .id(comment.getId().longValue())
+                .objectType(comment.getCommentedType())
+                .objectId(comment.getCommentedId() != null ? comment.getCommentedId().longValue() : null)
+                .notes(comment.getContent())
+                .isPrivate(false)
+                .userId(comment.getAuthorId() != null ? comment.getAuthorId().longValue() : null)
+                .userName(getAuthorDisplayName(comment.getAuthorId()))
+                .userLogin(author != null ? author.getLogin() : null)
+                .createdOn(comment.getCreatedOn())
+                .updatedOn(comment.getUpdatedOn())
+                .updatedById(null)
+                .updatedByName(null)
+                .build();
     }
 
     /**

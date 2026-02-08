@@ -566,10 +566,29 @@ public class ActivityService {
                     throw new BusinessException("项目不存在");
                 }
                 break;
-            // TODO: 添加其他对象类型的验证
+            // 消息评论使用 comments 表，由 MessageService / BoardController 处理，此处不支持 Message
             default:
                 throw new BusinessException("不支持的对象类型: " + objectType);
         }
+    }
+
+    /**
+     * 分页查询指定对象的评论列表（按创建时间倒序）
+     */
+    public PageResponse<CommentResponseDTO> listComments(String objectType, Long objectId, Integer current, Integer size) {
+        LambdaQueryWrapper<Journal> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Journal::getJournalizedType, objectType)
+                .eq(Journal::getJournalizedId, objectId != null ? objectId.intValue() : null)
+                .orderByDesc(Journal::getId);
+        int pageNum = (current != null && current > 0) ? current : 1;
+        int pageSize = (size != null && size > 0) ? size : 20;
+        Page<Journal> page = new Page<>(pageNum, pageSize);
+        Page<Journal> result = journalMapper.selectPage(page, wrapper);
+        List<CommentResponseDTO> list = new ArrayList<>();
+        for (Journal j : result.getRecords()) {
+            list.add(convertToCommentResponse(j));
+        }
+        return PageResponse.of(list, (int) result.getTotal(), (int) result.getCurrent(), (int) result.getSize());
     }
 
     /**
