@@ -2,6 +2,7 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.board.BoardCreateRequestDTO;
+import com.github.jredmine.dto.request.board.BoardUpdateRequestDTO;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.entity.Board;
 import com.github.jredmine.entity.EnabledModule;
@@ -18,7 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 论坛板块服务：创建、列表、详情、更新、删除（本期实现创建）
+ * 论坛板块服务：创建、列表、详情、更新、删除
  *
  * @author panfeng
  */
@@ -81,6 +82,59 @@ public class BoardService {
         boardMapper.insert(board);
         log.info("论坛板块创建成功: projectId={}, boardId={}, name={}", projectId, board.getId(), name);
         return toDetailResponse(board);
+    }
+
+    /**
+     * 更新板块：仅更新请求中非空字段（name、description、position）。
+     * 若更新 name，同项目下不可与其他板块重名。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public BoardDetailResponseDTO update(Long projectId, Integer boardId, BoardUpdateRequestDTO dto) {
+        if (dto == null) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "更新内容不能为空");
+        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        Board board = getBoardByProjectAndId(projectId, boardId);
+        if (dto.getName() != null) {
+            String name = dto.getName().trim();
+            if (name.isEmpty()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID, "板块名称不能为空");
+            }
+            LambdaQueryWrapper<Board> sameName = new LambdaQueryWrapper<>();
+            sameName.eq(Board::getProjectId, projectId.intValue())
+                    .eq(Board::getName, name)
+                    .ne(Board::getId, boardId);
+            if (boardMapper.selectCount(sameName) > 0) {
+                throw new BusinessException(ResultCode.BOARD_NAME_EXISTS);
+            }
+            board.setName(name);
+        }
+        if (dto.getDescription() != null) {
+            board.setDescription(dto.getDescription());
+        }
+        if (dto.getPosition() != null) {
+            board.setPosition(dto.getPosition());
+        }
+        boardMapper.updateById(board);
+        log.info("论坛板块已更新: projectId={}, boardId={}", projectId, boardId);
+        return toDetailResponse(board);
+    }
+
+    /**
+     * 按项目与板块 ID 获取板块，不存在或不属于该项目则抛 BOARD_NOT_FOUND。
+     */
+    private Board getBoardByProjectAndId(Long projectId, Integer boardId) {
+        Board board = boardMapper.selectById(boardId);
+        if (board == null || !board.getProjectId().equals(projectId.intValue())) {
+            throw new BusinessException(ResultCode.BOARD_NOT_FOUND);
+        }
+        return board;
     }
 
     private BoardDetailResponseDTO toDetailResponse(Board board) {
