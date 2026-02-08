@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.jredmine.dto.request.board.BoardCreateRequestDTO;
 import com.github.jredmine.dto.request.board.BoardUpdateRequestDTO;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
+import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
 import com.github.jredmine.entity.Board;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.Project;
@@ -18,6 +19,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * 论坛板块服务：创建、列表、详情、更新、删除
  *
@@ -31,6 +35,28 @@ public class BoardService {
     private final BoardMapper boardMapper;
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectMapper projectMapper;
+
+    /**
+     * 板块列表（含统计）：按项目查询所有板块，按 position、name 排序。
+     * 要求项目存在且已启用论坛模块。lastMessageSubject、lastMessageUpdatedOn 待消息模块实现后可填充。
+     */
+    public List<BoardListItemResponseDTO> listBoards(Long projectId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        LambdaQueryWrapper<Board> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Board::getProjectId, projectId.intValue())
+                .orderByAsc(Board::getPosition)
+                .orderByAsc(Board::getName);
+        List<Board> list = boardMapper.selectList(wrapper);
+        return list.stream()
+                .map(this::toListItemResponse)
+                .collect(Collectors.toList());
+    }
 
     /**
      * 检查项目是否启用了论坛模块
@@ -135,6 +161,22 @@ public class BoardService {
             throw new BusinessException(ResultCode.BOARD_NOT_FOUND);
         }
         return board;
+    }
+
+    private BoardListItemResponseDTO toListItemResponse(Board board) {
+        return BoardListItemResponseDTO.builder()
+                .id(board.getId())
+                .projectId(board.getProjectId())
+                .name(board.getName())
+                .description(board.getDescription())
+                .position(board.getPosition())
+                .topicsCount(board.getTopicsCount() != null ? board.getTopicsCount() : 0)
+                .messagesCount(board.getMessagesCount() != null ? board.getMessagesCount() : 0)
+                .lastMessageId(board.getLastMessageId())
+                .lastMessageSubject(null)
+                .lastMessageUpdatedOn(null)
+                .parentId(board.getParentId())
+                .build();
     }
 
     private BoardDetailResponseDTO toDetailResponse(Board board) {
