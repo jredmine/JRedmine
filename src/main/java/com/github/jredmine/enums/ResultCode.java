@@ -68,6 +68,7 @@ public enum ResultCode {
     BOARDS_NOT_ENABLED(400, "项目未启用论坛模块"),
     BOARD_NOT_FOUND(404, "论坛板块不存在"),
     BOARD_NAME_EXISTS(409, "该项目下已存在同名板块"),
+    BOARD_HAS_MESSAGES(400, "板块下仍有消息，无法删除"),
 
     // 菜单错误
     MENU_NOT_FOUND(404, "菜单不存在"),

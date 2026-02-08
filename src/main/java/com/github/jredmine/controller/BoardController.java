@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -74,5 +75,15 @@ public class BoardController {
             @RequestBody(required = false) BoardUpdateRequestDTO request) {
         BoardDetailResponseDTO result = boardService.update(projectId, boardId, request);
         return ApiResponse.success("板块更新成功", result);
+    }
+
+    @Operation(summary = "删除板块", description = "仅允许删除空板块（板块下无消息时可删除）；若板块下仍有消息则不允许删除。需要 manage_boards 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'manage_boards')")
+    @DeleteMapping("/{boardId}")
+    public ApiResponse<Void> delete(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId) {
+        boardService.delete(projectId, boardId);
+        return ApiResponse.success();
     }
 }

@@ -7,11 +7,13 @@ import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
 import com.github.jredmine.entity.Board;
 import com.github.jredmine.entity.EnabledModule;
+import com.github.jredmine.entity.Message;
 import com.github.jredmine.entity.Project;
 import com.github.jredmine.enums.ProjectModule;
 import com.github.jredmine.enums.ResultCode;
 import com.github.jredmine.exception.BusinessException;
 import com.github.jredmine.mapper.BoardMapper;
+import com.github.jredmine.mapper.MessageMapper;
 import com.github.jredmine.mapper.project.EnabledModuleMapper;
 import com.github.jredmine.mapper.project.ProjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +35,7 @@ import java.util.stream.Collectors;
 public class BoardService {
 
     private final BoardMapper boardMapper;
+    private final MessageMapper messageMapper;
     private final EnabledModuleMapper enabledModuleMapper;
     private final ProjectMapper projectMapper;
 
@@ -72,6 +75,28 @@ public class BoardService {
         }
         Board board = getBoardByProjectAndId(projectId, boardId);
         return toDetailResponse(board);
+    }
+
+    /**
+     * 删除板块：仅允许删除空板块（板块下无消息时才能删除）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void delete(Long projectId, Integer boardId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        Board board = getBoardByProjectAndId(projectId, boardId);
+        LambdaQueryWrapper<Message> msgWrapper = new LambdaQueryWrapper<>();
+        msgWrapper.eq(Message::getBoardId, boardId);
+        if (messageMapper.selectCount(msgWrapper) > 0) {
+            throw new BusinessException(ResultCode.BOARD_HAS_MESSAGES);
+        }
+        boardMapper.deleteById(boardId);
+        log.info("论坛板块已删除: projectId={}, boardId={}, name={}", projectId, boardId, board.getName());
     }
 
     /**
