@@ -10,6 +10,7 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
+import com.github.jredmine.dto.response.board.MessageTopicDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
 import com.github.jredmine.service.BoardService;
 import com.github.jredmine.service.MessageService;
@@ -76,6 +77,19 @@ public class BoardController {
             @RequestParam(value = "size", defaultValue = "20") Integer size,
             @RequestParam(value = "keyword", required = false) String keyword) {
         PageResponse<MessageTopicListItemResponseDTO> result = messageService.listTopics(projectId, boardId, current, size, keyword);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "主题详情", description = "获取主题详情及该主题下的回复分页列表（回复按创建时间正序）。需项目已启用论坛模块。需要 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @GetMapping("/{boardId}/topics/{messageId}")
+    public ApiResponse<MessageTopicDetailResponseDTO> getTopicDetail(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @PathVariable Integer messageId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "20") Integer size) {
+        MessageTopicDetailResponseDTO result = messageService.getTopicDetail(projectId, boardId, messageId, current, size);
         return ApiResponse.success(result);
     }
 

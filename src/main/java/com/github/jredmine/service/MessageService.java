@@ -9,6 +9,8 @@ import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
+import com.github.jredmine.dto.response.board.MessageReplyListItemResponseDTO;
+import com.github.jredmine.dto.response.board.MessageTopicDetailResponseDTO;
 import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
 import com.github.jredmine.entity.Board;
 import com.github.jredmine.entity.EnabledModule;
@@ -174,6 +176,45 @@ public class MessageService {
     }
 
     /**
+     * 主题详情：返回主题信息及该主题下的回复分页列表（回复按创建时间正序）。
+     * 要求项目存在、已启用论坛模块、板块存在且属于项目、消息为当前板块下的主题。
+     */
+    public MessageTopicDetailResponseDTO getTopicDetail(Long projectId, Integer boardId, Integer messageId,
+            Integer current, Integer size) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        getBoardByProjectAndId(projectId, boardId);
+        Message topic = getTopicMessageOrThrow(boardId, messageId);
+        MessageDetailResponseDTO topicDto = toMessageDetailResponse(topic);
+        int pageNum = (current != null && current > 0) ? current : 1;
+        int pageSize = (size != null && size > 0) ? size : 20;
+        LambdaQueryWrapper<Message> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Message::getBoardId, boardId)
+                .eq(Message::getParentId, messageId)
+                .orderByAsc(Message::getId);
+        Page<Message> page = new Page<>(pageNum, pageSize);
+        IPage<Message> replyPage = messageMapper.selectPage(page, wrapper);
+        List<MessageReplyListItemResponseDTO> replyList = new ArrayList<>();
+        for (Message msg : replyPage.getRecords()) {
+            replyList.add(toReplyListItemResponse(msg));
+        }
+        PageResponse<MessageReplyListItemResponseDTO> replies = PageResponse.of(
+                replyList,
+                (int) replyPage.getTotal(),
+                (int) replyPage.getCurrent(),
+                (int) replyPage.getSize());
+        return MessageTopicDetailResponseDTO.builder()
+                .topic(topicDto)
+                .replies(replies)
+                .build();
+    }
+
+    /**
      * 更新消息：仅更新请求体中提供的非空字段。
      * 权限：当前用户为消息作者或拥有 manage_boards；否则 403。
      * subject、locked、sticky 仅对主题帖（parent_id 为空）有效，回复只更新 content。
@@ -297,6 +338,18 @@ public class MessageService {
                 .updatedOn(message.getUpdatedOn())
                 .locked(message.getLocked())
                 .sticky(message.getSticky())
+                .build();
+    }
+
+    private MessageReplyListItemResponseDTO toReplyListItemResponse(Message message) {
+        return MessageReplyListItemResponseDTO.builder()
+                .id(message.getId())
+                .parentId(message.getParentId())
+                .content(message.getContent())
+                .authorId(message.getAuthorId())
+                .authorName(getAuthorDisplayName(message.getAuthorId()))
+                .createdOn(message.getCreatedOn())
+                .updatedOn(message.getUpdatedOn())
                 .build();
     }
 
