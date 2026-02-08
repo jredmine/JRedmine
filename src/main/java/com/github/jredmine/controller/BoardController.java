@@ -2,10 +2,13 @@ package com.github.jredmine.controller;
 
 import com.github.jredmine.dto.request.board.BoardCreateRequestDTO;
 import com.github.jredmine.dto.request.board.BoardUpdateRequestDTO;
+import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
+import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
 import com.github.jredmine.service.BoardService;
+import com.github.jredmine.service.MessageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,9 +36,11 @@ import java.util.List;
 public class BoardController {
 
     private final BoardService boardService;
+    private final MessageService messageService;
 
-    public BoardController(BoardService boardService) {
+    public BoardController(BoardService boardService, MessageService messageService) {
         this.boardService = boardService;
+        this.messageService = messageService;
     }
 
     @Operation(summary = "板块列表", description = "按项目查询所有板块（含主题数、消息总数、最后消息 ID），按 position、name 排序。需项目已启用论坛模块。需要 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
@@ -54,6 +59,17 @@ public class BoardController {
             @PathVariable Integer boardId) {
         BoardDetailResponseDTO result = boardService.getDetail(projectId, boardId);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "发主题", description = "在板块下发布新主题（subject 必填，content 可选）。需项目已启用论坛模块。需要 add_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'add_messages')")
+    @PostMapping("/{boardId}/topics")
+    public ApiResponse<MessageDetailResponseDTO> createTopic(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @Valid @RequestBody TopicCreateRequestDTO request) {
+        MessageDetailResponseDTO result = messageService.createTopic(projectId, boardId, request);
+        return ApiResponse.success("主题发布成功", result);
     }
 
     @Operation(summary = "创建板块", description = "在项目下新增一个论坛板块（name 必填，description、position、parentId 可选）。需项目已启用论坛模块；同项目下板块名称不可重复。需要 manage_boards 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
