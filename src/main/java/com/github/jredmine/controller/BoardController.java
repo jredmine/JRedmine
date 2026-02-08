@@ -6,9 +6,11 @@ import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
 import com.github.jredmine.dto.response.ApiResponse;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.board.BoardDetailResponseDTO;
 import com.github.jredmine.dto.response.board.BoardListItemResponseDTO;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
+import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
 import com.github.jredmine.service.BoardService;
 import com.github.jredmine.service.MessageService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -60,6 +63,19 @@ public class BoardController {
             @PathVariable Long projectId,
             @PathVariable Integer boardId) {
         BoardDetailResponseDTO result = boardService.getDetail(projectId, boardId);
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "主题分页列表", description = "按板块分页查询主题，置顶优先、按更新时间倒序；可选 keyword 模糊匹配标题或正文。需项目已启用论坛模块。需要 view_messages 权限或系统管理员。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or hasPermission(#projectId, 'Project', 'view_messages')")
+    @GetMapping("/{boardId}/topics")
+    public ApiResponse<PageResponse<MessageTopicListItemResponseDTO>> listTopics(
+            @PathVariable Long projectId,
+            @PathVariable Integer boardId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "20") Integer size,
+            @RequestParam(value = "keyword", required = false) String keyword) {
+        PageResponse<MessageTopicListItemResponseDTO> result = messageService.listTopics(projectId, boardId, current, size, keyword);
         return ApiResponse.success(result);
     }
 

@@ -2,10 +2,14 @@ package com.github.jredmine.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.jredmine.dto.request.board.MessageUpdateRequestDTO;
 import com.github.jredmine.dto.request.board.ReplyCreateRequestDTO;
 import com.github.jredmine.dto.request.board.TopicCreateRequestDTO;
+import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.board.MessageDetailResponseDTO;
+import com.github.jredmine.dto.response.board.MessageTopicListItemResponseDTO;
 import com.github.jredmine.entity.Board;
 import com.github.jredmine.entity.EnabledModule;
 import com.github.jredmine.entity.Message;
@@ -26,7 +30,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 
 /**
  * 论坛消息/主题服务：发主题、回复、更新、删除等
@@ -131,6 +137,40 @@ public class MessageService {
         boardMapper.updateById(board);
         log.info("论坛回复已创建: projectId={}, boardId={}, topicId={}, replyId={}", projectId, boardId, topicMessageId, reply.getId());
         return toMessageDetailResponse(reply);
+    }
+
+    /**
+     * 主题分页列表：sticky 优先、updated_on 倒序；keyword 可选（模糊匹配 subject、content）。
+     * 要求项目存在、已启用论坛模块、板块存在且属于项目。
+     */
+    public PageResponse<MessageTopicListItemResponseDTO> listTopics(Long projectId, Integer boardId,
+            Integer current, Integer size, String keyword) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+        }
+        if (!isBoardsEnabledForProject(projectId)) {
+            throw new BusinessException(ResultCode.BOARDS_NOT_ENABLED);
+        }
+        getBoardByProjectAndId(projectId, boardId);
+        LambdaQueryWrapper<Message> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Message::getBoardId, boardId)
+                .isNull(Message::getParentId);
+        if (keyword != null && !keyword.isBlank()) {
+            String k = keyword.trim();
+            wrapper.and(w -> w.like(Message::getSubject, k).or().like(Message::getContent, k));
+        }
+        wrapper.orderByDesc(Message::getSticky)
+                .orderByDesc(Message::getUpdatedOn);
+        int pageNum = (current != null && current > 0) ? current : 1;
+        int pageSize = (size != null && size > 0) ? size : 20;
+        Page<Message> page = new Page<>(pageNum, pageSize);
+        IPage<Message> result = messageMapper.selectPage(page, wrapper);
+        List<MessageTopicListItemResponseDTO> list = new ArrayList<>();
+        for (Message msg : result.getRecords()) {
+            list.add(toTopicListItemResponse(msg));
+        }
+        return PageResponse.of(list, (int) result.getTotal(), (int) result.getCurrent(), (int) result.getSize());
     }
 
     /**
@@ -243,6 +283,21 @@ public class MessageService {
         String name = ((user.getFirstname() != null ? user.getFirstname() : "") + " "
                 + (user.getLastname() != null ? user.getLastname() : "")).trim();
         return name.isEmpty() ? user.getLogin() : name;
+    }
+
+    private MessageTopicListItemResponseDTO toTopicListItemResponse(Message message) {
+        return MessageTopicListItemResponseDTO.builder()
+                .id(message.getId())
+                .boardId(message.getBoardId())
+                .subject(message.getSubject())
+                .authorId(message.getAuthorId())
+                .authorName(getAuthorDisplayName(message.getAuthorId()))
+                .repliesCount(message.getRepliesCount() != null ? message.getRepliesCount() : 0)
+                .createdOn(message.getCreatedOn())
+                .updatedOn(message.getUpdatedOn())
+                .locked(message.getLocked())
+                .sticky(message.getSticky())
+                .build();
     }
 
     private MessageDetailResponseDTO toMessageDetailResponse(Message message) {
