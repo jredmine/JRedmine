@@ -22,5 +22,10 @@ public class UserDetailResponseDTO {
     private Date createdOn;
     private Date updatedOn;
     private String mailNotification;
+
+    /**
+     * 主邮箱（来自 email_addresses，默认地址）
+     */
+    private String email;
 }
 

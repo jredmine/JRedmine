@@ -11,6 +11,7 @@ import com.github.jredmine.dto.request.user.UserLoginRequestDTO;
 import com.github.jredmine.dto.request.user.UserPreferenceUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserRegisterRequestDTO;
 import com.github.jredmine.dto.request.user.UserStatusUpdateRequestDTO;
+import com.github.jredmine.dto.request.user.UserSelfUpdateRequestDTO;
 import com.github.jredmine.dto.request.user.UserUpdateRequestDTO;
 import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.user.UserDetailResponseDTO;
@@ -258,7 +259,7 @@ public class UserService {
             log.info("用户详情查询成功，用户ID: {}", id);
 
             // 转换为响应 DTO
-            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+            return enrichDetail(user);
         } finally {
             // 清理 MDC
             MDC.clear();
@@ -308,7 +309,7 @@ public class UserService {
             log.info("用户创建成功，用户ID: {}", user.getId());
 
             // 转换为响应 DTO
-            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+            return enrichDetail(user);
         } finally {
             // 清理 MDC
             MDC.clear();
@@ -474,9 +475,34 @@ public class UserService {
             }
 
             // 转换为响应 DTO
-            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+            return enrichDetail(user);
         } finally {
             // 清理 MDC
+            MDC.clear();
+        }
+    }
+
+    /**
+     * 当前登录用户自助更新资料（仅姓名、邮箱、语言、邮件通知；不含管理员与状态）
+     */
+    public UserDetailResponseDTO updateCurrentUserProfile(String username, UserSelfUpdateRequestDTO requestDTO) {
+        MDC.put("operation", "update_current_user_profile");
+        try {
+            LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(User::getLogin, username);
+            queryWrapper.isNull(User::getDeletedAt);
+            User user = userMapper.selectOne(queryWrapper);
+            if (user == null) {
+                throw new BusinessException(ResultCode.USER_NOT_FOUND);
+            }
+            UserUpdateRequestDTO full = new UserUpdateRequestDTO();
+            full.setFirstname(requestDTO.getFirstname());
+            full.setLastname(requestDTO.getLastname());
+            full.setEmail(requestDTO.getEmail());
+            full.setLanguage(requestDTO.getLanguage());
+            full.setMailNotification(requestDTO.getMailNotification());
+            return updateUser(user.getId(), full);
+        } finally {
             MDC.clear();
         }
     }
@@ -522,7 +548,7 @@ public class UserService {
             // 3. 检查状态是否有变化
             if (user.getStatus() != null && user.getStatus().equals(status)) {
                 log.debug("用户状态无变化，用户ID: {}, 状态: {}", id, status);
-                return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+                return enrichDetail(user);
             }
 
             // 4. 更新用户状态
@@ -533,7 +559,7 @@ public class UserService {
             log.info("用户状态更新成功，用户ID: {}, 新状态: {}", id, status);
 
             // 转换为响应 DTO
-            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+            return enrichDetail(user);
         } finally {
             // 清理 MDC
             MDC.clear();
@@ -570,7 +596,7 @@ public class UserService {
             log.info("当前用户信息查询成功，用户ID: {}", user.getId());
 
             // 转换为响应 DTO
-            return UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+            return enrichDetail(user);
         } finally {
             // 清理 MDC
             MDC.clear();
@@ -804,6 +830,15 @@ public class UserService {
             // 创建新邮箱（设为默认）
             saveEmailAddress(userId, email, true);
         }
+    }
+
+    /**
+     * 组装用户详情 DTO（补充主邮箱）
+     */
+    private UserDetailResponseDTO enrichDetail(User user) {
+        UserDetailResponseDTO dto = UserConverter.INSTANCE.toUserDetailResponseDTO(user);
+        dto.setEmail(getUserEmail(user.getId()));
+        return dto;
     }
 
     /**
