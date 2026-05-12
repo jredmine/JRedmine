@@ -3,6 +3,7 @@ package com.github.jredmine.dto.response.project;
 import lombok.Data;
 
 import java.util.Date;
+import java.util.List;
 
 /**
  * 项目详情响应DTO
@@ -81,5 +82,15 @@ public class ProjectDetailResponseDTO {
      * 默认任务查询ID
      */
     private Long defaultIssueQueryId;
+
+    /**
+     * 启用的模块列表
+     */
+    private List<String> enabledModules;
+
+    /**
+     * 关联的跟踪器ID列表
+     */
+    private List<Long> trackerIds;
 }
 

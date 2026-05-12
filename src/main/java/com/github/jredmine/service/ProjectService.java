@@ -2064,6 +2064,19 @@ public class ProjectService {
         dto.setDefaultVersionId(project.getDefaultVersionId());
         dto.setDefaultAssignedToId(project.getDefaultAssignedToId());
         dto.setDefaultIssueQueryId(project.getDefaultIssueQueryId());
+
+        LambdaQueryWrapper<EnabledModule> moduleQuery = new LambdaQueryWrapper<>();
+        moduleQuery.eq(EnabledModule::getProjectId, project.getId());
+        dto.setEnabledModules(enabledModuleMapper.selectList(moduleQuery).stream()
+                .map(EnabledModule::getName)
+                .collect(Collectors.toList()));
+
+        LambdaQueryWrapper<ProjectTracker> trackerQuery = new LambdaQueryWrapper<>();
+        trackerQuery.eq(ProjectTracker::getProjectId, project.getId());
+        dto.setTrackerIds(projectTrackerMapper.selectList(trackerQuery).stream()
+                .map(ProjectTracker::getTrackerId)
+                .collect(Collectors.toList()));
+
         return dto;
     }
 
