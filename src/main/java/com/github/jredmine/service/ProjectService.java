@@ -2186,6 +2186,8 @@ public class ProjectService {
                             item.setTrackerId(t.getTrackerId());
                             item.setTrackerName(t.getTrackerName());
                             item.setCount(t.getCount());
+                            item.setOpenCount(t.getOpenCount());
+                            item.setClosedCount(t.getClosedCount());
                             byTracker.add(item);
                         }
                         projectIssueStatistics.setByTracker(byTracker);

@@ -116,6 +116,16 @@ public class IssueStatisticsResponseDTO {
          * 任务数量
          */
         private Integer count;
+
+        /**
+         * 打开的任务数（状态未关闭）
+         */
+        private Integer openCount;
+
+        /**
+         * 已关闭的任务数
+         */
+        private Integer closedCount;
     }
 
     /**

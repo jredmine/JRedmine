@@ -122,5 +122,11 @@ public class ProjectStatisticsResponseDTO {
         private String trackerName;
         @Schema(description = "任务数量")
         private Integer count;
+
+        @Schema(description = "打开的任务数（状态未关闭）")
+        private Integer openCount;
+
+        @Schema(description = "已关闭的任务数")
+        private Integer closedCount;
     }
 }

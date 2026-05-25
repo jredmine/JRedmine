@@ -2369,20 +2369,29 @@ public class IssueService {
             statusStatistics.sort((a, b) -> Integer.compare(a.getStatusId(), b.getStatusId()));
             statistics.setStatusStatistics(statusStatistics);
 
-            // 按跟踪器统计
-            Map<Integer, Integer> trackerCountMap = new HashMap<>();
+            // 按跟踪器统计（含打开/已关闭）
+            Map<Integer, int[]> trackerCountMap = new HashMap<>();
             for (Issue issue : filteredIssues) {
-                trackerCountMap.put(issue.getTrackerId(),
-                        trackerCountMap.getOrDefault(issue.getTrackerId(), 0) + 1);
+                int[] counts = trackerCountMap.computeIfAbsent(issue.getTrackerId(), k -> new int[2]);
+                IssueStatus status = statusMap.get(issue.getStatusId());
+                if (status != null && Boolean.TRUE.equals(status.getIsClosed())) {
+                    counts[1]++;
+                } else {
+                    counts[0]++;
+                }
             }
             List<IssueStatisticsResponseDTO.TrackerStatistics> trackerStatistics = new ArrayList<>();
-            for (Map.Entry<Integer, Integer> entry : trackerCountMap.entrySet()) {
+            for (Map.Entry<Integer, int[]> entry : trackerCountMap.entrySet()) {
                 Tracker tracker = trackerMapper.selectById(entry.getKey().longValue());
                 if (tracker != null) {
+                    int open = entry.getValue()[0];
+                    int closed = entry.getValue()[1];
                     IssueStatisticsResponseDTO.TrackerStatistics stat = new IssueStatisticsResponseDTO.TrackerStatistics();
                     stat.setTrackerId(tracker.getId().intValue());
                     stat.setTrackerName(tracker.getName());
-                    stat.setCount(entry.getValue());
+                    stat.setOpenCount(open);
+                    stat.setClosedCount(closed);
+                    stat.setCount(open + closed);
                     trackerStatistics.add(stat);
                 }
             }
