@@ -358,6 +358,17 @@ public class IssueService {
             // 状态筛选
             if (requestDTO.getStatusId() != null) {
                 queryWrapper.eq(Issue::getStatusId, requestDTO.getStatusId());
+            } else if (requestDTO.getStatusIsClosed() != null) {
+                List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
+                List<Integer> statusIds = allStatuses.stream()
+                        .filter(s -> requestDTO.getStatusIsClosed().equals(Boolean.TRUE.equals(s.getIsClosed())))
+                        .map(IssueStatus::getId)
+                        .toList();
+                if (statusIds.isEmpty()) {
+                    queryWrapper.eq(Issue::getStatusId, -1);
+                } else {
+                    queryWrapper.in(Issue::getStatusId, statusIds);
+                }
             }
 
             // 跟踪器筛选
@@ -539,6 +550,17 @@ public class IssueService {
             // 状态筛选
             if (requestDTO.getStatusId() != null) {
                 queryWrapper.eq(Issue::getStatusId, requestDTO.getStatusId());
+            } else if (requestDTO.getStatusIsClosed() != null) {
+                List<IssueStatus> allStatuses = issueStatusMapper.selectList(null);
+                List<Integer> statusIds = allStatuses.stream()
+                        .filter(s -> requestDTO.getStatusIsClosed().equals(Boolean.TRUE.equals(s.getIsClosed())))
+                        .map(IssueStatus::getId)
+                        .toList();
+                if (statusIds.isEmpty()) {
+                    queryWrapper.eq(Issue::getStatusId, -1);
+                } else {
+                    queryWrapper.in(Issue::getStatusId, statusIds);
+                }
             }
 
             // 跟踪器筛选

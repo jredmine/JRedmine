@@ -25,6 +25,11 @@ public class IssueListRequestDTO extends PageRequestDTO {
     private Integer statusId;
 
     /**
+     * 按状态是否已关闭筛选（true=已关闭，false=打开）；与 statusId 同时传入时以 statusId 为准
+     */
+    private Boolean statusIsClosed;
+
+    /**
      * 跟踪器ID
      */
     private Integer trackerId;
