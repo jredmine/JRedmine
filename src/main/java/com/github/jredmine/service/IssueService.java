@@ -426,6 +426,8 @@ public class IssueService {
                 });
             }
 
+            applyIssueDateRangeFilters(queryWrapper, requestDTO);
+
             // 是否私有筛选
             if (requestDTO.getIsPrivate() != null) {
                 queryWrapper.eq(Issue::getIsPrivate, requestDTO.getIsPrivate());
@@ -634,6 +636,8 @@ public class IssueService {
                             .like(Issue::getDescription, requestDTO.getKeyword().trim());
                 });
             }
+
+            applyIssueDateRangeFilters(queryWrapper, requestDTO);
 
             // 是否私有筛选
             if (requestDTO.getIsPrivate() != null) {
@@ -3232,6 +3236,24 @@ public class IssueService {
                 return "预估工时";
             default:
                 return fieldName;
+        }
+    }
+
+    /**
+     * 应用任务列表的创建/更新日期范围筛选
+     */
+    private void applyIssueDateRangeFilters(LambdaQueryWrapper<Issue> queryWrapper, IssueListRequestDTO requestDTO) {
+        if (requestDTO.getCreatedOnFrom() != null) {
+            queryWrapper.ge(Issue::getCreatedOn, requestDTO.getCreatedOnFrom().atStartOfDay());
+        }
+        if (requestDTO.getCreatedOnTo() != null) {
+            queryWrapper.lt(Issue::getCreatedOn, requestDTO.getCreatedOnTo().plusDays(1).atStartOfDay());
+        }
+        if (requestDTO.getUpdatedOnFrom() != null) {
+            queryWrapper.ge(Issue::getUpdatedOn, requestDTO.getUpdatedOnFrom().atStartOfDay());
+        }
+        if (requestDTO.getUpdatedOnTo() != null) {
+            queryWrapper.lt(Issue::getUpdatedOn, requestDTO.getUpdatedOnTo().plusDays(1).atStartOfDay());
         }
     }
 

@@ -3,6 +3,9 @@ package com.github.jredmine.dto.request.issue;
 import com.github.jredmine.dto.request.PageRequestDTO;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import org.springframework.format.annotation.DateTimeFormat;
+
+import java.time.LocalDate;
 
 /**
  * 任务列表查询请求DTO
@@ -63,6 +66,30 @@ public class IssueListRequestDTO extends PageRequestDTO {
      * 关键词（搜索标题和描述）
      */
     private String keyword;
+
+    /**
+     * 创建日期起（含当天）
+     */
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate createdOnFrom;
+
+    /**
+     * 创建日期止（含当天）
+     */
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate createdOnTo;
+
+    /**
+     * 更新日期起（含当天）
+     */
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate updatedOnFrom;
+
+    /**
+     * 更新日期止（含当天）
+     */
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate updatedOnTo;
 
     /**
      * 是否私有
