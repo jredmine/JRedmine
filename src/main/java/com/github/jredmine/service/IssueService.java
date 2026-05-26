@@ -27,6 +27,7 @@ import com.github.jredmine.dto.response.issue.IssueCategoryResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
+import com.github.jredmine.dto.response.issue.IssuePriorityResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
@@ -507,6 +508,26 @@ public class IssueService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * 获取任务优先级列表（IssuePriority 枚举）
+     */
+    public List<IssuePriorityResponseDTO> listIssuePriorities() {
+        LambdaQueryWrapper<Enumeration> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(Enumeration::getType, "IssuePriority")
+                .eq(Enumeration::getActive, true)
+                .orderByAsc(Enumeration::getPosition)
+                .orderByAsc(Enumeration::getId);
+        return enumerationMapper.selectList(queryWrapper).stream()
+                .map(e -> {
+                    IssuePriorityResponseDTO dto = new IssuePriorityResponseDTO();
+                    dto.setId(e.getId());
+                    dto.setName(e.getName());
+                    dto.setPosition(e.getPosition());
+                    return dto;
+                })
+                .toList();
     }
 
     /**

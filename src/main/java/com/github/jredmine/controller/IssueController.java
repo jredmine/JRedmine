@@ -19,6 +19,7 @@ import com.github.jredmine.dto.response.PageResponse;
 import com.github.jredmine.dto.response.issue.IssueDetailResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueJournalResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueListItemResponseDTO;
+import com.github.jredmine.dto.response.issue.IssuePriorityResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueRelationResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueStatisticsResponseDTO;
 import com.github.jredmine.dto.response.issue.IssueTreeNodeResponseDTO;
@@ -73,6 +74,13 @@ public class IssueController {
             @Valid IssueListRequestDTO requestDTO) {
         PageResponse<IssueListItemResponseDTO> result = issueService.listIssues(requestDTO);
         return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "获取任务优先级列表", description = "查询 IssuePriority 枚举，用于筛选与表单。需要认证。", security = @SecurityRequirement(name = "bearerAuth"))
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('view_issues')")
+    @GetMapping("/priorities")
+    public ApiResponse<List<IssuePriorityResponseDTO>> listIssuePriorities() {
+        return ApiResponse.success(issueService.listIssuePriorities());
     }
 
     @Operation(summary = "创建任务", description = "创建新任务。需要认证，需要 add_issues 权限或系统管理员。创建者自动设置为当前用户。如果未指定状态，将使用跟踪器的默认状态。", security = @SecurityRequirement(name = "bearerAuth"))
