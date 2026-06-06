@@ -97,7 +97,8 @@ public class IssueListRequestDTO extends PageRequestDTO {
     private Boolean isPrivate;
 
     /**
-     * 排序字段（created_on, updated_on, priority, due_date）
+     * 排序字段（id, project_id, tracker_id, subject, status_id, priority, assigned_to_id,
+     * done_ratio, created_on, updated_on, due_date）
      */
     private String sortBy;
 

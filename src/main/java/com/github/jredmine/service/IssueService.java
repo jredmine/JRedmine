@@ -450,43 +450,7 @@ public class IssueService {
             }
 
             // 排序
-            if (requestDTO.getSortBy() != null && !requestDTO.getSortBy().trim().isEmpty()) {
-                String sortField = requestDTO.getSortBy().trim().toLowerCase();
-                boolean ascending = "asc".equalsIgnoreCase(sortOrder);
-                switch (sortField) {
-                    case "created_on":
-                    case "updated_on":
-                        // 统一使用 id 排序
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getId);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getId);
-                        }
-                        break;
-                    case "priority":
-                    case "priority_id":
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getPriorityId);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getPriorityId);
-                        }
-                        break;
-                    case "due_date":
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getDueDate);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getDueDate);
-                        }
-                        break;
-                    default:
-                        // 默认按 ID 倒序
-                        queryWrapper.orderByDesc(Issue::getId);
-                        break;
-                }
-            } else {
-                // 默认按 ID 倒序
-                queryWrapper.orderByDesc(Issue::getId);
-            }
+            applyIssueListSort(queryWrapper, requestDTO.getSortBy(), sortOrder);
 
             // 执行分页查询
             Page<Issue> result = issueMapper.selectPage(page, queryWrapper);
@@ -660,40 +624,7 @@ public class IssueService {
 
             // 排序（复用任务列表排序逻辑）
             String sortOrder = requestDTO.getSortOrder() != null ? requestDTO.getSortOrder() : "desc";
-            if (requestDTO.getSortBy() != null && !requestDTO.getSortBy().trim().isEmpty()) {
-                String sortField = requestDTO.getSortBy().trim().toLowerCase();
-                boolean ascending = "asc".equalsIgnoreCase(sortOrder);
-                switch (sortField) {
-                    case "created_on":
-                    case "updated_on":
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getId);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getId);
-                        }
-                        break;
-                    case "priority":
-                    case "priority_id":
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getPriorityId);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getPriorityId);
-                        }
-                        break;
-                    case "due_date":
-                        if (ascending) {
-                            queryWrapper.orderByAsc(Issue::getDueDate);
-                        } else {
-                            queryWrapper.orderByDesc(Issue::getDueDate);
-                        }
-                        break;
-                    default:
-                        queryWrapper.orderByDesc(Issue::getId);
-                        break;
-                }
-            } else {
-                queryWrapper.orderByDesc(Issue::getId);
-            }
+            applyIssueListSort(queryWrapper, requestDTO.getSortBy(), sortOrder);
 
             // 查询所有符合条件的任务（不分页）
             List<Issue> issues = issueMapper.selectList(queryWrapper);
@@ -3254,6 +3185,98 @@ public class IssueService {
         }
         if (requestDTO.getUpdatedOnTo() != null) {
             queryWrapper.lt(Issue::getUpdatedOn, requestDTO.getUpdatedOnTo().plusDays(1).atStartOfDay());
+        }
+    }
+
+    /**
+     * 应用任务列表排序（列表查询与导出共用）
+     */
+    private void applyIssueListSort(LambdaQueryWrapper<Issue> queryWrapper, String sortBy, String sortOrder) {
+        String sortField = sortBy != null ? sortBy.trim().toLowerCase() : "";
+        boolean ascending = "asc".equalsIgnoreCase(sortOrder != null ? sortOrder : "desc");
+
+        switch (sortField) {
+            case "id":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getId);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getId);
+                }
+                break;
+            case "project_id":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getProjectId);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getProjectId);
+                }
+                break;
+            case "tracker_id":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getTrackerId);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getTrackerId);
+                }
+                break;
+            case "subject":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getSubject);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getSubject);
+                }
+                break;
+            case "status_id":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getStatusId);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getStatusId);
+                }
+                break;
+            case "priority":
+            case "priority_id":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getPriorityId);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getPriorityId);
+                }
+                break;
+            case "assigned_to_id":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getAssignedToId);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getAssignedToId);
+                }
+                break;
+            case "done_ratio":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getDoneRatio);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getDoneRatio);
+                }
+                break;
+            case "created_on":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getCreatedOn);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getCreatedOn);
+                }
+                break;
+            case "updated_on":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getUpdatedOn);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getUpdatedOn);
+                }
+                break;
+            case "due_date":
+                if (ascending) {
+                    queryWrapper.orderByAsc(Issue::getDueDate);
+                } else {
+                    queryWrapper.orderByDesc(Issue::getDueDate);
+                }
+                break;
+            default:
+                queryWrapper.orderByDesc(Issue::getId);
+                break;
         }
     }
 
