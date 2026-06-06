@@ -23,6 +23,11 @@ public class IssueUpdateRequestDTO {
     private String description;
 
     /**
+     * 跟踪器ID
+     */
+    private Integer trackerId;
+
+    /**
      * 状态ID
      */
     private Integer statusId;

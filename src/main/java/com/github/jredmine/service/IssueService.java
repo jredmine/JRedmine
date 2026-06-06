@@ -1652,6 +1652,16 @@ public class IssueService {
      * @param requestDTO 更新请求
      */
     private void applyUpdateToIssue(Issue issue, IssueUpdateRequestDTO requestDTO) {
+        // 处理跟踪器更新（如果提供）
+        if (requestDTO.getTrackerId() != null && !requestDTO.getTrackerId().equals(issue.getTrackerId())) {
+            Tracker tracker = trackerMapper.selectById(requestDTO.getTrackerId());
+            if (tracker == null) {
+                log.warn("跟踪器不存在，跟踪器ID: {}", requestDTO.getTrackerId());
+                throw new BusinessException(ResultCode.PARAM_INVALID, "跟踪器不存在");
+            }
+            issue.setTrackerId(requestDTO.getTrackerId());
+        }
+
         // 处理状态更新（如果提供）
         if (requestDTO.getStatusId() != null && !requestDTO.getStatusId().equals(issue.getStatusId())) {
             Integer newStatusId = requestDTO.getStatusId();
