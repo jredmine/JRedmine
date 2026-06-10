@@ -1473,6 +1473,13 @@ public class IssueService {
                     log.warn("用户无权限更新任务，任务ID: {}, 用户ID: {}", id, currentUserId);
                     throw new BusinessException(ResultCode.FORBIDDEN, "无权限更新任务，需要 edit_issues 权限");
                 }
+                Long targetProjectId = requestDTO.getProjectId();
+                if (targetProjectId != null && !targetProjectId.equals(issue.getProjectId())
+                        && !projectPermissionService.hasPermission(currentUserId, targetProjectId, "edit_issues")) {
+                    log.warn("用户无权限将任务迁移至目标项目，任务ID: {}, 目标项目ID: {}, 用户ID: {}",
+                            id, targetProjectId, currentUserId);
+                    throw new BusinessException(ResultCode.FORBIDDEN, "无权限将任务迁移至目标项目，需要 edit_issues 权限");
+                }
             }
 
             // 乐观锁检查
@@ -1652,6 +1659,21 @@ public class IssueService {
      * @param requestDTO 更新请求
      */
     private void applyUpdateToIssue(Issue issue, IssueUpdateRequestDTO requestDTO) {
+        // 处理项目迁移（如果提供）
+        Long newProjectId = requestDTO.getProjectId();
+        if (newProjectId != null && !newProjectId.equals(issue.getProjectId())) {
+            Project newProject = projectMapper.selectById(newProjectId);
+            if (newProject == null) {
+                log.warn("目标项目不存在，项目ID: {}", newProjectId);
+                throw new BusinessException(ResultCode.PROJECT_NOT_FOUND);
+            }
+            issue.setProjectId(newProjectId);
+            issue.setCategoryId(null);
+            issue.setFixedVersionId(null);
+            issue.setParentId(null);
+            log.info("任务将迁移至新项目，任务ID: {}, 新项目ID: {}", issue.getId(), newProjectId);
+        }
+
         // 处理跟踪器更新（如果提供）
         if (requestDTO.getTrackerId() != null && !requestDTO.getTrackerId().equals(issue.getTrackerId())) {
             Tracker tracker = trackerMapper.selectById(requestDTO.getTrackerId());

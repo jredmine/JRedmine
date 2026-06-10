@@ -13,6 +13,11 @@ import java.time.LocalDate;
 @Data
 public class IssueUpdateRequestDTO {
     /**
+     * 目标项目 ID（迁移问题时使用，须对原项目与目标项目均有 edit_issues 权限）
+     */
+    private Long projectId;
+
+    /**
      * 任务标题
      */
     private String subject;
