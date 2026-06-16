@@ -20,6 +20,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 /**
  * 工时记录控制器
  *
@@ -45,6 +47,16 @@ public class TimeEntryController {
     public ApiResponse<PageResponse<TimeEntryResponseDTO>> queryTimeEntries(TimeEntryQueryRequestDTO request) {
         PageResponse<TimeEntryResponseDTO> result = timeEntryService.queryTimeEntries(request);
         return ApiResponse.success(result);
+    }
+
+    /**
+     * 获取工时活动类型列表
+     */
+    @Operation(summary = "获取工时活动类型列表", description = "返回可用于登记工时的活动类型")
+    @GetMapping("/activities")
+    @PreAuthorize("hasRole('ADMIN') or authentication.principal.hasPermission('log_time') or authentication.principal.hasPermission('view_time_entries')")
+    public ApiResponse<List<TimeEntryActivityResponseDTO>> listTimeEntryActivities() {
+        return ApiResponse.success(timeEntryService.listTimeEntryActivities());
     }
 
     /**

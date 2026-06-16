@@ -130,6 +130,26 @@ public class TimeEntryService {
     }
 
     /**
+     * 获取工时活动类型列表
+     */
+    public List<TimeEntryActivityResponseDTO> listTimeEntryActivities() {
+        LambdaQueryWrapper<Enumeration> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Enumeration::getType, "TimeEntryActivity")
+                .eq(Enumeration::getActive, true)
+                .orderByAsc(Enumeration::getPosition)
+                .orderByAsc(Enumeration::getId);
+        return enumerationMapper.selectList(wrapper).stream()
+                .map(activity -> {
+                    TimeEntryActivityResponseDTO dto = new TimeEntryActivityResponseDTO();
+                    dto.setId(activity.getId().longValue());
+                    dto.setName(activity.getName());
+                    dto.setIsDefault(activity.getIsDefault());
+                    return dto;
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
      * 根据ID获取工时记录详情
      */
     public TimeEntryResponseDTO getTimeEntryById(Long id) {
