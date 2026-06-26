@@ -1336,6 +1336,13 @@ public class IssueService {
             // 填充关联信息
             fillRelatedInfo(dto, issue);
 
+            // 填充当前用户是否已关注
+            LambdaQueryWrapper<Watcher> watcherQuery = new LambdaQueryWrapper<>();
+            watcherQuery.eq(Watcher::getWatchableType, "Issue")
+                    .eq(Watcher::getWatchableId, id.intValue())
+                    .eq(Watcher::getUserId, currentUser.getId().intValue());
+            dto.setWatched(watcherMapper.selectOne(watcherQuery) != null);
+
             log.info("任务详情查询成功，任务ID: {}", id);
             return dto;
         } catch (BusinessException e) {

@@ -168,4 +168,9 @@ public class IssueDetailResponseDTO {
      * 任务关联关系列表（所有类型）
      */
     private java.util.List<IssueRelationResponseDTO> relations;
+
+    /**
+     * 当前登录用户是否已关注该任务
+     */
+    private Boolean watched;
 }
